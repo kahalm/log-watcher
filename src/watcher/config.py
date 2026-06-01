@@ -99,9 +99,11 @@ class Config:
     state_file: str = field(default_factory=lambda: _str("STATE_FILE", "/data/state.json"))
     cooldown_hours: float = field(default_factory=lambda: _float("COOLDOWN_HOURS", 12.0))
 
-    # --- Health / Heartbeat ---
+    # --- Health / Heartbeat / HTTP ---
     heartbeat_file: str = field(default_factory=lambda: _str("HEARTBEAT_FILE", "/data/heartbeat"))
     heartbeat_interval: int = field(default_factory=lambda: _int("HEARTBEAT_INTERVAL_SECONDS", 60))
+    health_max_staleness: float = field(default_factory=lambda: _float("HEALTH_MAX_STALENESS_SECONDS", 180.0))
+    http_port: int = field(default_factory=lambda: _int("HTTP_PORT", 0))  # 0 = aus (Features 15/16)
 
     # --- Sonstiges ---
     dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))

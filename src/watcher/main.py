@@ -10,8 +10,9 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Config
 from .es_client import ESClient, ESError
-from . import rules, analyzer, notifier, state, health, alerts, scrub
+from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver
 from . import fingerprint as fp
+from .metrics import METRICS
 
 log = logging.getLogger("log-watcher")
 
@@ -57,6 +58,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     now_ts = now.timestamp()
     known = state.known_fingerprints(st, cfg.name)
     signals = rules.evaluate(current, baseline, cfg, known_fingerprints=known)
+    METRICS.add_signals([s.kind for s in signals])
 
     # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9).
     state.record_fingerprints(st, cfg.name, {fp.fingerprint(m) for m in current.get("error_messages", {})}, now_ts)
@@ -70,6 +72,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     sig = state.signature(signals)
     if state.in_cooldown(st, cfg.name, sig, cfg.cooldown_hours * 3600, now_ts):
         state.save_state(cfg.state_file, st)
+        METRICS.inc("suppressed_total")
         log.info("Unterdrückt (Cooldown aktiv für Signatur %s).", sig)
         return
 
@@ -92,6 +95,8 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         assessment = analyzer.assess(cfg, current, baseline, signals, samples=samples, use_llm=use_llm)
         if assessment.get("llm_used"):
             state.record_llm_call(st, day, assessment.get("llm_tokens", 0))
+            METRICS.inc("llm_calls_total")
+            METRICS.inc("llm_tokens_total", assessment.get("llm_tokens", 0))
         state.put_verdict(st, cfg.name, sig, assessment, now_ts)
 
     log.info("Beurteilung: anomalous=%s severity=%s llm=%s",
@@ -129,6 +134,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             except ESError as e:
                 log.warning("Alert-Indizierung fehlgeschlagen: %s", e)
 
+    METRICS.inc("alerts_total")
     state.save_state(cfg.state_file, state.record_alert(st, cfg.name, sig, now_ts))
 
 
@@ -194,6 +200,8 @@ def main() -> int:
 
     log.info("log-watcher gestartet (intervall=%ss, fenster=%sh, indices=%s, dry_run=%s)",
              cfg.interval_seconds, cfg.window_hours, cfg.es_indices, cfg.dry_run)
+    METRICS.start(now.timestamp())
+    httpserver.start_http_server(cfg)
     health.write_heartbeat(cfg.heartbeat_file)
     startup_probe(cfg, es, now)
 
@@ -214,9 +222,11 @@ def main() -> int:
         try:
             run_cycle(cfg, es, datetime.now(timezone.utc))
         except ESError as e:
+            METRICS.inc("es_errors_total")
             log.error("ES-Fehler: %s", e)
         except Exception:
             log.exception("Unerwarteter Fehler im Zyklus")
+        METRICS.mark_cycle(time.time())
         health.write_heartbeat(cfg.heartbeat_file)
         if cfg.run_once:
             return 0
