@@ -62,10 +62,12 @@ class ESClient:
         q = self._range(start_iso, end_iso)
         all_err_levels = cfg.error_levels + cfg.warn_levels
 
+        by_index = {"by_index": {"terms": {"field": "_index", "size": 50}}}
         full = {
             "size": 0, "track_total_hits": True, "query": q,
             "aggs": {
                 "by_level": {"terms": {"field": cfg.level_field, "size": 30}},
+                **by_index,
                 "errors": {
                     "filter": {"terms": {cfg.level_field: all_err_levels}},
                     "aggs": {"top_messages": {"terms": {"field": cfg.message_field, "size": 15}}},
@@ -74,7 +76,7 @@ class ESClient:
         }
         levels_only = {
             "size": 0, "track_total_hits": True, "query": q,
-            "aggs": {"by_level": {"terms": {"field": cfg.level_field, "size": 30}}},
+            "aggs": {"by_level": {"terms": {"field": cfg.level_field, "size": 30}}, **by_index},
         }
         total_only = {"size": 0, "track_total_hits": True, "query": q}
 
@@ -124,4 +126,8 @@ class ESClient:
             str(b["key"]): b["doc_count"]
             for b in aggs.get("errors", {}).get("top_messages", {}).get("buckets", [])
         }
-        return {"total": total_count, "levels": levels, "error_messages": err_msgs}
+        per_index = {
+            str(b["key"]): b["doc_count"]
+            for b in aggs.get("by_index", {}).get("buckets", [])
+        }
+        return {"total": total_count, "levels": levels, "error_messages": err_msgs, "per_index": per_index}

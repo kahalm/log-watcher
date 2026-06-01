@@ -40,6 +40,11 @@ def _list(key, default):
 
 @dataclass
 class Config:
+    # --- Identität / Baseline ---
+    name: str = field(default_factory=lambda: _str("TARGET_NAME", "default"))
+    # Baseline-Vergleichsfenster: previous (Vorfenster) | yesterday (-24h) | last_week (-7d)
+    baseline_mode: str = field(default_factory=lambda: _str("BASELINE_MODE", "previous"))
+
     # --- Elasticsearch (nur lesend) ---
     es_url: str = field(default_factory=lambda: _str("ES_URL", "http://elasticsearch:9200"))
     es_indices: list = field(default_factory=lambda: _list("ES_INDICES", "rookhub-logs-*,crawler-logs-*"))

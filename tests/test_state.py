@@ -17,28 +17,50 @@ def test_signature_stable_and_distinct():
 
 
 def test_cooldown_window():
-    sig = "abc123"
     st = {}
-    assert not state.in_cooldown(st, sig, 3600, now=1000)
-    st = state.record(st, sig, now=1000)
-    assert state.in_cooldown(st, sig, 3600, now=1500)       # innerhalb Cooldown
-    assert not state.in_cooldown(st, sig, 3600, now=5000)    # nach Cooldown
+    assert not state.in_cooldown(st, "t", "sig", 3600, now=1000)
+    state.record_alert(st, "t", "sig", now=1000)
+    assert state.in_cooldown(st, "t", "sig", 3600, now=1500)
+    assert not state.in_cooldown(st, "t", "sig", 3600, now=5000)
 
 
-def test_record_prunes_old():
+def test_cooldown_is_per_target():
     st = {}
-    st = state.record(st, "old", now=0.0)               # uralt
-    st = state.record(st, "fresh", now=40 * 86400.0)    # 40 Tage später
-    assert "old" not in st["alerts"]
-    assert "fresh" in st["alerts"]
+    state.record_alert(st, "a", "sig", now=1000)
+    assert state.in_cooldown(st, "a", "sig", 3600, now=1100)
+    assert not state.in_cooldown(st, "b", "sig", 3600, now=1100)
+
+
+def test_first_seen_fingerprints():
+    st = {}
+    assert state.known_fingerprints(st, "t") == set()
+    state.record_fingerprints(st, "t", {"fp1", "fp2"}, now=1000)
+    assert state.known_fingerprints(st, "t") == {"fp1", "fp2"}
+
+
+def test_verdict_cache_ttl():
+    st = {}
+    assert state.get_cached_verdict(st, "t", "sig", 3600, now=1000) is None
+    state.put_verdict(st, "t", "sig", {"anomalous": True}, now=1000)
+    assert state.get_cached_verdict(st, "t", "sig", 3600, now=1500) == {"anomalous": True}
+    assert state.get_cached_verdict(st, "t", "sig", 3600, now=5000) is None
+
+
+def test_llm_budget_per_day():
+    st = {}
+    assert state.llm_calls_remaining(st, "2026-06-01", 3) == 3
+    state.record_llm_call(st, "2026-06-01", 100)
+    state.record_llm_call(st, "2026-06-01", 50)
+    assert state.llm_calls_remaining(st, "2026-06-01", 3) == 1
+    assert state.llm_calls_remaining(st, "2026-06-02", 3) == 3  # neuer Tag
 
 
 def test_save_load_roundtrip(tmp_path):
     p = str(tmp_path / "state.json")
-    st = state.record({}, "sig1", now=123.0)
+    st = state.record_alert({}, "t", "sig1", now=123.0)
     state.save_state(p, st)
     loaded = state.load_state(p)
-    assert loaded.get("alerts", {}).get("sig1") == 123.0
+    assert loaded["targets"]["t"]["alerts"]["sig1"] == 123.0
 
 
 def test_load_missing_returns_empty(tmp_path):

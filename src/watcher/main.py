@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from .config import Config
 from .es_client import ESClient, ESError
 from . import rules, analyzer, notifier, state, health, alerts
+from . import fingerprint as fp
 
 log = logging.getLogger("log-watcher")
 
@@ -26,24 +27,43 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+def _baseline_window(cfg: Config, now: datetime, win: timedelta):
+    """Vergleichsfenster je nach BASELINE_MODE (Feature 7)."""
+    if cfg.baseline_mode == "yesterday":
+        end = now - timedelta(hours=24)
+        return end - win, end
+    if cfg.baseline_mode == "last_week":
+        end = now - timedelta(days=7)
+        return end - win, end
+    # previous (Default): unmittelbares Vorfenster
+    return now - 2 * win, now - win
+
+
 def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     win = timedelta(hours=cfg.window_hours)
-    end, start, base_start = now, now - win, now - 2 * win
-    current = es.aggregate_window(_iso(start), _iso(end))
-    baseline = es.aggregate_window(_iso(base_start), _iso(start))
-    log.info("Fenster: total=%s levels=%s | Baseline: total=%s",
-             current["total"], current["levels"], baseline["total"])
+    base_start, base_end = _baseline_window(cfg, now, win)
+    current = es.aggregate_window(_iso(now - win), _iso(now))
+    baseline = es.aggregate_window(_iso(base_start), _iso(base_end))
+    log.info("Fenster: total=%s levels=%s | Baseline(%s): total=%s",
+             current["total"], current["levels"], cfg.baseline_mode, baseline["total"])
 
-    signals = rules.evaluate(current, baseline, cfg)
+    st = state.load_state(cfg.state_file)
+    now_ts = now.timestamp()
+    known = state.known_fingerprints(st, cfg.name)
+    signals = rules.evaluate(current, baseline, cfg, known_fingerprints=known)
+
+    # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9).
+    state.record_fingerprints(st, cfg.name, {fp.fingerprint(m) for m in current.get("error_messages", {})}, now_ts)
+
     if not signals:
+        state.save_state(cfg.state_file, st)
         log.info("Keine Auffälligkeit (Regel-Gate leer).")
         return
 
     log.info("Regel-Gate ausgelöst: %s", [s.kind for s in signals])
     sig = state.signature(signals)
-    st = state.load_state(cfg.state_file)
-    now_ts = now.timestamp()
-    if state.in_cooldown(st, sig, cfg.cooldown_hours * 3600, now_ts):
+    if state.in_cooldown(st, cfg.name, sig, cfg.cooldown_hours * 3600, now_ts):
+        state.save_state(cfg.state_file, st)
         log.info("Unterdrückt (Cooldown aktiv für Signatur %s).", sig)
         return
 
@@ -53,7 +73,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
 
     if not assessment.get("anomalous"):
         # Auch "nicht auffällig" merken -> kein erneuter LLM-Call für dasselbe Muster im Cooldown.
-        state.save_state(cfg.state_file, state.record(st, sig, now_ts))
+        state.save_state(cfg.state_file, state.record_alert(st, cfg.name, sig, now_ts))
         return
 
     severity = assessment.get("severity", rules.overall_severity(signals))
@@ -83,7 +103,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             except ESError as e:
                 log.warning("Alert-Indizierung fehlgeschlagen: %s", e)
 
-    state.save_state(cfg.state_file, state.record(st, sig, now_ts))
+    state.save_state(cfg.state_file, state.record_alert(st, cfg.name, sig, now_ts))
 
 
 def startup_probe(cfg: Config, es: ESClient, now: datetime) -> None:

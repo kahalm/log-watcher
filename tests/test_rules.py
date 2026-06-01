@@ -85,6 +85,36 @@ def test_ingestion_stopped():
     assert "ingestion_stopped" in kinds
 
 
+def test_index_silent_partial_outage():
+    c = _cfg()
+    current = {"total": 100, "levels": {"Information": 100}, "error_messages": {},
+               "per_index": {"a-2026.06": 100, "b-2026.06": 0}}
+    baseline = {"total": 100, "levels": {"Information": 100}, "error_messages": {},
+                "per_index": {"a-2026.06": 50, "b-2026.06": 50}}
+    kinds = [s.kind for s in rules.evaluate(current, baseline, c)]
+    assert "index_silent" in kinds        # b verstummt, a lebt weiter
+    assert "ingestion_stopped" not in kinds
+
+
+def test_new_errors_respects_known_fingerprints():
+    from watcher.fingerprint import fingerprint
+    c = _cfg()
+    current = {"total": 50, "levels": {"Error": 3}, "error_messages": {"boom code 7": 3}}
+    baseline = {"total": 50, "levels": {"Error": 3}, "error_messages": {}}
+    assert "new_errors" in [s.kind for s in rules.evaluate(current, baseline, c)]
+    # Fingerprint bereits bekannt -> nicht mehr "neu"
+    known = {fingerprint("boom code 7")}
+    assert "new_errors" not in [s.kind for s in rules.evaluate(current, baseline, c, known_fingerprints=known)]
+
+
+def test_new_errors_groups_by_fingerprint():
+    c = _cfg()
+    # "timeout after 30s/45s" sind dieselbe Signatur -> wenn baseline eine kennt, ist die andere NICHT neu
+    current = {"total": 50, "levels": {"Error": 3}, "error_messages": {"timeout after 45s": 3}}
+    baseline = {"total": 50, "levels": {"Error": 3}, "error_messages": {"timeout after 30s": 2}}
+    assert "new_errors" not in [s.kind for s in rules.evaluate(current, baseline, c)]
+
+
 def test_overall_severity():
     sigs = rules.evaluate(
         {"total": 10, "levels": {"Fatal": 1}, "error_messages": {}},
