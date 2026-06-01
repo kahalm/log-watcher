@@ -30,6 +30,15 @@ def evaluate(current: dict, baseline: dict, cfg) -> "list[Signal]":
             "error_spike", "medium",
             f"{cur_err} Fehler im Fenster (Vorfenster: {base_err}, Schwelle Faktor {cfg.error_spike_factor})."))
 
+    # 1b) Warn-Spike: separat, mit höherer Mindestmenge (Warnungen sind lauter).
+    if cfg.alert_on_warn_spike:
+        cur_warn = _count_levels(current["levels"], cfg.warn_levels)
+        base_warn = _count_levels(baseline["levels"], cfg.warn_levels)
+        if cur_warn >= cfg.min_warnings and cur_warn >= base_warn * cfg.warn_spike_factor:
+            signals.append(Signal(
+                "warn_spike", "low",
+                f"{cur_warn} Warnungen im Fenster (Vorfenster: {base_warn}, Schwelle Faktor {cfg.warn_spike_factor})."))
+
     # 2) Fatal/Critical immer melden.
     fatal_levels = [l for l in cfg.error_levels if l.lower() in ("fatal", "critical")]
     fatal = _count_levels(current["levels"], fatal_levels)

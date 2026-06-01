@@ -60,6 +60,10 @@ class Config:
     # --- Cheap-Rules (billiges, deterministisches Gate vor dem LLM) ---
     min_errors: int = field(default_factory=lambda: _int("MIN_ERRORS", 5))
     error_spike_factor: float = field(default_factory=lambda: _float("ERROR_SPIKE_FACTOR", 3.0))
+    # Warnungen sind lauter als Fehler -> höhere Mindestmenge, eigener Faktor, abschaltbar.
+    min_warnings: int = field(default_factory=lambda: _int("MIN_WARNINGS", 20))
+    warn_spike_factor: float = field(default_factory=lambda: _float("WARN_SPIKE_FACTOR", 3.0))
+    alert_on_warn_spike: bool = field(default_factory=lambda: _bool("ALERT_ON_WARN_SPIKE", True))
     alert_on_new_signatures: bool = field(default_factory=lambda: _bool("ALERT_ON_NEW_SIGNATURES", True))
     ingestion_drop_check: bool = field(default_factory=lambda: _bool("INGESTION_DROP_CHECK", True))
 

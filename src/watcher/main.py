@@ -58,12 +58,13 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
 
     severity = assessment.get("severity", rules.overall_severity(signals))
     subject = f"[log-watcher][{severity.upper()}] Auffälligkeit in {', '.join(cfg.es_indices)}"
-    body = notifier.build_email_body(assessment, signals, current, baseline, cfg)
+    text_body = notifier.build_email_body(assessment, signals, current, baseline, cfg)
+    html_body = notifier.build_email_html(assessment, signals, current, baseline, cfg)
     if cfg.dry_run:
-        log.warning("DRY_RUN: würde E-Mail senden:\n--- %s ---\n%s", subject, body)
+        log.warning("DRY_RUN: würde E-Mail senden:\n--- %s ---\n%s", subject, text_body)
     else:
-        notifier.send_email(cfg, subject, body)
-        log.info("E-Mail gesendet an %s", cfg.smtp_to)
+        notifier.send_email(cfg, subject, text_body, html_body)
+        log.info("E-Mail (HTML+Text) gesendet an %s", cfg.smtp_to)
     state.save_state(cfg.state_file, state.record(st, sig, now_ts))
 
 

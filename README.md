@@ -39,12 +39,15 @@ False-Positives niedrig.
 - **Degradiert sauber:** Ohne `ANTHROPIC_API_KEY` meldet der Watcher rein **regelbasiert**.
 
 ## Signale (Regel-Gate)
-| Signal | Bedeutung |
-|--------|-----------|
-| `error_spike` | `Error/Fatal`-Anzahl ≥ `MIN_ERRORS` **und** ≥ `ERROR_SPIKE_FACTOR` × Vorfenster |
-| `fatal` | mind. ein `Fatal`/`Critical`-Eintrag |
-| `new_errors` | Fehler-Message-Templates, die im Vorfenster nicht vorkamen |
-| `ingestion_stopped` | vorher Logs, jetzt 0 → Pipeline evtl. tot |
+| Signal | Schwere | Bedeutung |
+|--------|---------|-----------|
+| `error_spike` | medium | `Error/Fatal`-Anzahl ≥ `MIN_ERRORS` **und** ≥ `ERROR_SPIKE_FACTOR` × Vorfenster |
+| `warn_spike` | low | `Warning`-Anzahl ≥ `MIN_WARNINGS` **und** ≥ `WARN_SPIKE_FACTOR` × Vorfenster (lauter → höhere Schwelle, via `ALERT_ON_WARN_SPIKE` abschaltbar) |
+| `fatal` | high | mind. ein `Fatal`/`Critical`-Eintrag |
+| `new_errors` | medium | Fehler-Message-Templates, die im Vorfenster nicht vorkamen |
+| `ingestion_stopped` | high | vorher Logs, jetzt 0 → Pipeline evtl. tot |
+
+Die Alarm-Mail wird als **HTML** (mit farbigen Severity-Badges + Level-Tabelle Aktuell-vs-Baseline) **plus Plaintext-Fallback** verschickt.
 
 ## Konfiguration (ENV)
 Siehe `.env.example`. Wichtigste Werte:

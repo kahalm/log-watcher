@@ -48,6 +48,35 @@ def test_new_signatures():
     assert "new_errors" in kinds
 
 
+def test_warn_spike():
+    c = _cfg()  # min_warnings=20, warn_spike_factor=3.0
+    current = {"total": 500, "levels": {"Warning": 60}, "error_messages": {}}
+    baseline = {"total": 500, "levels": {"Warning": 5}, "error_messages": {}}
+    kinds = [s.kind for s in rules.evaluate(current, baseline, c)]
+    assert "warn_spike" in kinds
+    assert "error_spike" not in kinds  # keine Fehler -> kein error_spike
+
+
+def test_no_warn_spike_below_min():
+    c = _cfg()
+    current = {"total": 500, "levels": {"Warning": 12}, "error_messages": {}}
+    baseline = {"total": 500, "levels": {"Warning": 0}, "error_messages": {}}
+    # 12 < MIN_WARNINGS(20) -> kein warn_spike
+    assert [s.kind for s in rules.evaluate(current, baseline, c)] == []
+
+
+def test_warn_spike_disabled():
+    import os
+    os.environ["ALERT_ON_WARN_SPIKE"] = "false"
+    try:
+        c = Config()
+        current = {"total": 500, "levels": {"Warning": 99}, "error_messages": {}}
+        baseline = {"total": 500, "levels": {"Warning": 1}, "error_messages": {}}
+        assert [s.kind for s in rules.evaluate(current, baseline, c)] == []
+    finally:
+        del os.environ["ALERT_ON_WARN_SPIKE"]
+
+
 def test_ingestion_stopped():
     c = _cfg()
     current = {"total": 0, "levels": {}, "error_messages": {}}
