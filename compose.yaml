@@ -1,12 +1,19 @@
 services:
   log-watcher:
     build: .
-    image: log-watcher:latest
+    image: ghcr.io/kahalm/log-watcher:latest
     container_name: log-watcher
     restart: unless-stopped
     env_file: .env
+    stop_grace_period: 20s        # SIGTERM -> sauberes Herunterfahren (Loop bricht ab)
     volumes:
-      - ./data:/data          # State (Dedupe/Cooldown) persistent
+      - ./data:/data              # State (Dedupe/Cooldown) + Heartbeat persistent
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     networks:
       - monitored
 

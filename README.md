@@ -60,6 +60,9 @@ Siehe `.env.example`. Wichtigste Werte:
 | `SMTP_*` | – | Mailversand (Pflicht außer `DRY_RUN=true`) |
 | `COOLDOWN_HOURS` | `12` | gleiche Auffälligkeit nicht öfter melden |
 | `DRY_RUN` | `false` | keine Mail, nur loggen (zum Einrichten) |
+| `SELFTEST` | `false` | einmaliger Konfig-Check (Probe + Trockenlauf), dann beenden |
+| `NOTIFY_ON_START` | `false` | einmalige „gestartet"-Mail (Verkabelung testen) |
+| `HEARTBEAT_INTERVAL_SECONDS` / `HEALTH_MAX_STALENESS_SECONDS` | `60` / `180` | Docker-Healthcheck |
 
 > Hinweis rookhub: Der ES läuft mit `xpack.security.enabled=false` → **keine** `ES_API_KEY`
 > nötig. Für gesicherte Cluster `ES_API_KEY` **oder** `ES_USER`/`ES_PASSWORD` setzen.
@@ -70,9 +73,24 @@ python -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 PYTHONPATH=src pytest -q
 
-# Einmal gegen einen ES laufen, ohne Mail:
-ES_URL=http://localhost:9200 DRY_RUN=true RUN_ONCE=true PYTHONPATH=src python -m watcher.main
+# Konfig-Check gegen einen echten ES (Probe + Trockenlauf, keine Mail):
+ES_URL=http://localhost:9200 SELFTEST=true PYTHONPATH=src python -m watcher.main
 ```
+
+## Betrieb
+- **Robustheit:** Stimmt ein Feldname nicht (z.B. `ES_MESSAGE_FIELD`), reduziert sich die
+  Aggregation automatisch (volle Aggregation → nur Levels → nur Total) statt auszufallen;
+  beim Start läuft eine **Probe**, die fehlende Logs/Felder sofort als WARN meldet.
+- **Healthcheck:** Der Loop schreibt regelmäßig einen Heartbeat; der Docker-Healthcheck
+  (`healthcheck.py`) meldet `unhealthy`, wenn der Heartbeat veraltet ist.
+- **Sauberes Herunterfahren:** `SIGTERM`/`SIGINT` brechen den langen Schlaf sofort ab
+  (kein Warten bis zum nächsten Intervall).
+- **Kostentransparenz:** Bei LLM-Aufrufen wird der Token-Verbrauch geloggt.
+
+## CI / Deploy (tag-gated, wie die übrigen Repos)
+- Push auf `main` → Build `:dev`. Git-Tag `vX.Y.Z` → Build `:latest` + `:X.Y.Z` (Watchtower zieht `:latest`).
+- Tests laufen via GitHub Actions (`.github/workflows/test.yml`).
+- Image: `ghcr.io/kahalm/log-watcher`.
 
 ## Deploy (Docker)
 1. `cp .env.example .env` und ausfüllen (SMTP, ggf. ANTHROPIC_API_KEY).

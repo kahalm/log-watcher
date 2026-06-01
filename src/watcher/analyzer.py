@@ -7,6 +7,9 @@ rein regelbasiertes Melden.
 from __future__ import annotations
 
 import json
+import logging
+
+log = logging.getLogger("log-watcher")
 
 _TOOL = {
     "name": "report_assessment",
@@ -71,6 +74,11 @@ def assess(cfg, current, baseline, signals) -> dict:
             "content": "Bewerte diese Log-Aggregate:\n\n" + json.dumps(payload, ensure_ascii=False, indent=2),
         }],
     )
+    usage = getattr(msg, "usage", None)
+    if usage is not None:
+        log.info("LLM-Verbrauch: in=%s out=%s tokens (model=%s)",
+                 getattr(usage, "input_tokens", "?"), getattr(usage, "output_tokens", "?"), cfg.model)
+
     for block in msg.content:
         if getattr(block, "type", None) == "tool_use" and block.name == "report_assessment":
             result = dict(block.input)

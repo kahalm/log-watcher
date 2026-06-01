@@ -1,13 +1,23 @@
-"""Elasticsearch-Aggregat-Abfragen (ausschließlich lesend, size=0)."""
+"""Elasticsearch-Aggregat-Abfragen (ausschließlich lesend, size=0).
+
+Robust gegen Fehlkonfiguration der Feldnamen: schlägt die volle Aggregation fehl
+(z.B. message_field nicht aggregierbar), wird stufenweise reduziert, statt den
+ganzen Zyklus zu verlieren.
+"""
 from __future__ import annotations
 
 import base64
+import logging
 
 import requests
 
+log = logging.getLogger("log-watcher")
+
 
 class ESError(Exception):
-    pass
+    def __init__(self, message: str, status: "int | None" = None):
+        super().__init__(message)
+        self.status = status  # HTTP-Status (4xx/5xx) oder None bei Verbindungsfehler
 
 
 class ESClient:
@@ -32,17 +42,28 @@ class ESClient:
             r = requests.post(url, json=body, headers=self._headers(), timeout=30)
             r.raise_for_status()
             return r.json()
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            detail = (e.response.text[:300] if e.response is not None else str(e))
+            raise ESError(f"ES HTTP {status}: {detail}", status=status) from e
         except requests.RequestException as e:
-            raise ESError(f"ES-Anfrage fehlgeschlagen: {e}") from e
+            raise ESError(f"ES nicht erreichbar: {e}", status=None) from e
+
+    def _range(self, start_iso: str, end_iso: str) -> dict:
+        return {"range": {self.cfg.timestamp_field: {"gte": start_iso, "lt": end_iso}}}
 
     def aggregate_window(self, start_iso: str, end_iso: str) -> dict:
-        """Aggregate für ein Zeitfenster: {total, levels, error_messages}."""
+        """Aggregate für ein Zeitfenster: {total, levels, error_messages}.
+
+        Fallback-Leiter bei 4xx (z.B. ungültiges Feld): volle Aggregation ->
+        nur Levels -> nur total. Bei Verbindungsfehler (status None) sofort weiterreichen.
+        """
         cfg = self.cfg
+        q = self._range(start_iso, end_iso)
         all_err_levels = cfg.error_levels + cfg.warn_levels
-        body = {
-            "size": 0,
-            "track_total_hits": True,
-            "query": {"range": {cfg.timestamp_field: {"gte": start_iso, "lt": end_iso}}},
+
+        full = {
+            "size": 0, "track_total_hits": True, "query": q,
             "aggs": {
                 "by_level": {"terms": {"field": cfg.level_field, "size": 30}},
                 "errors": {
@@ -51,7 +72,24 @@ class ESClient:
                 },
             },
         }
-        return self._parse(self._search(body))
+        levels_only = {
+            "size": 0, "track_total_hits": True, "query": q,
+            "aggs": {"by_level": {"terms": {"field": cfg.level_field, "size": 30}}},
+        }
+        total_only = {"size": 0, "track_total_hits": True, "query": q}
+
+        for body, note in ((full, None),
+                           (levels_only, f"message_field '{cfg.message_field}' nicht aggregierbar?"),
+                           (total_only, f"level_field '{cfg.level_field}' nicht aggregierbar?")):
+            try:
+                return self._parse(self._search(body))
+            except ESError as e:
+                if e.status is None or e.status >= 500:
+                    raise  # Verbindungs-/Serverfehler -> nicht durch Feld-Fallback heilbar
+                if note:
+                    log.warning("Aggregation reduziert (%s): %s", note, e)
+        # unerreichbar, aber zur Sicherheit:
+        return {"total": 0, "levels": {}, "error_messages": {}}
 
     @staticmethod
     def _parse(resp: dict) -> dict:

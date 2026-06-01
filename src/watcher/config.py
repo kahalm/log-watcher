@@ -81,8 +81,14 @@ class Config:
     state_file: str = field(default_factory=lambda: _str("STATE_FILE", "/data/state.json"))
     cooldown_hours: float = field(default_factory=lambda: _float("COOLDOWN_HOURS", 12.0))
 
+    # --- Health / Heartbeat ---
+    heartbeat_file: str = field(default_factory=lambda: _str("HEARTBEAT_FILE", "/data/heartbeat"))
+    heartbeat_interval: int = field(default_factory=lambda: _int("HEARTBEAT_INTERVAL_SECONDS", 60))
+
     # --- Sonstiges ---
     dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))
+    notify_on_start: bool = field(default_factory=lambda: _bool("NOTIFY_ON_START", False))
+    selftest: bool = field(default_factory=lambda: _bool("SELFTEST", False))
 
     @property
     def window_seconds(self) -> float:

@@ -2,15 +2,24 @@
 from __future__ import annotations
 
 import logging
+import signal
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
 from .config import Config
 from .es_client import ESClient, ESError
-from . import rules, analyzer, notifier, state
+from . import rules, analyzer, notifier, state, health
 
 log = logging.getLogger("log-watcher")
+
+_stop = threading.Event()
+
+
+def _handle_signal(signum, _frame):
+    log.info("Signal %s empfangen — fahre nach dem aktuellen Schritt sauber herunter.", signum)
+    _stop.set()
 
 
 def _iso(dt: datetime) -> str:
@@ -58,8 +67,53 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     state.save_state(cfg.state_file, state.record(st, sig, now_ts))
 
 
+def startup_probe(cfg: Config, es: ESClient, now: datetime) -> None:
+    """Einmalige Diagnose beim Start: ES erreichbar? Logs/Felder plausibel?"""
+    try:
+        win = timedelta(hours=cfg.window_hours)
+        sample = es.aggregate_window(_iso(now - win), _iso(now))
+        if sample["total"] == 0:
+            log.warning("Startup-Probe: 0 Dokumente im letzten Fenster — ES_URL/ES_INDICES/Zeitfeld prüfen?")
+        elif not sample["levels"]:
+            log.warning("Startup-Probe: %s Dokumente, aber keine Level-Buckets — ES_LEVEL_FIELD '%s' prüfen?",
+                        sample["total"], cfg.level_field)
+        else:
+            log.info("Startup-Probe ok: total=%s levels=%s", sample["total"], sample["levels"])
+    except ESError as e:
+        log.error("Startup-Probe: ES nicht erreichbar (%s) — versuche es im Loop weiter.", e)
+
+
+def selftest(cfg: Config, es: ESClient, now: datetime) -> int:
+    """Konfig-Check: Aggregate + Signale anzeigen, keine Mail. Beendet danach."""
+    log.info("SELFTEST: einmaliger Trockenlauf (keine Mail wird gesendet).")
+    startup_probe(cfg, es, now)
+    forced = Config()
+    forced.__dict__.update(cfg.__dict__)
+    forced.dry_run = True
+    try:
+        run_cycle(forced, es, now)
+    except ESError as e:
+        log.error("SELFTEST: ES-Fehler: %s", e)
+        return 1
+    return 0
+
+
+def _sleep_with_heartbeat(cfg: Config, seconds: float) -> None:
+    """In Häppchen schlafen, dabei Heartbeat aktualisieren und auf Stop-Signal reagieren."""
+    deadline = time.monotonic() + seconds
+    while not _stop.is_set():
+        health.write_heartbeat(cfg.heartbeat_file)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        _stop.wait(min(cfg.heartbeat_interval, remaining))
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     cfg = Config()
     errs = cfg.validate()
     if errs:
@@ -68,19 +122,37 @@ def main() -> int:
         return 1
 
     es = ESClient(cfg)
+    now = datetime.now(timezone.utc)
+
+    if cfg.selftest:
+        return selftest(cfg, es, now)
+
     log.info("log-watcher gestartet (intervall=%ss, fenster=%sh, indices=%s, dry_run=%s)",
              cfg.interval_seconds, cfg.window_hours, cfg.es_indices, cfg.dry_run)
+    health.write_heartbeat(cfg.heartbeat_file)
+    startup_probe(cfg, es, now)
 
-    while True:
+    if cfg.notify_on_start and not cfg.dry_run:
+        try:
+            notifier.send_email(cfg, "[log-watcher] gestartet",
+                                f"log-watcher läuft. Intervall {cfg.window_hours}h, Indices {cfg.es_indices}.")
+        except Exception as e:  # noqa: BLE001 — Start-Mail darf den Start nicht verhindern
+            log.warning("Start-Mail fehlgeschlagen: %s", e)
+
+    while not _stop.is_set():
         try:
             run_cycle(cfg, es, datetime.now(timezone.utc))
         except ESError as e:
             log.error("ES-Fehler: %s", e)
         except Exception:
             log.exception("Unerwarteter Fehler im Zyklus")
+        health.write_heartbeat(cfg.heartbeat_file)
         if cfg.run_once:
             return 0
-        time.sleep(cfg.interval_seconds)
+        _sleep_with_heartbeat(cfg, cfg.interval_seconds)
+
+    log.info("Sauber beendet.")
+    return 0
 
 
 if __name__ == "__main__":
