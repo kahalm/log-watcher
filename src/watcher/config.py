@@ -79,6 +79,12 @@ class Config:
     anthropic_api_key: "str | None" = field(default_factory=lambda: _str("ANTHROPIC_API_KEY"))
     model: str = field(default_factory=lambda: _str("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"))
     max_tokens: int = field(default_factory=lambda: _int("ANTHROPIC_MAX_TOKENS", 1024))
+    llm_max_calls_per_day: int = field(default_factory=lambda: _int("LLM_MAX_CALLS_PER_DAY", 50))   # Budget (11)
+    llm_verdict_ttl_hours: float = field(default_factory=lambda: _float("LLM_VERDICT_TTL_HOURS", 12.0))  # Cache (12)
+    include_samples: bool = field(default_factory=lambda: _bool("LLM_INCLUDE_SAMPLES", True))       # (14)
+    sample_size: int = field(default_factory=lambda: _int("LLM_SAMPLE_SIZE", 5))
+    sample_field: str = field(default_factory=lambda: _str("LLM_SAMPLE_FIELD", "message"))
+    scrub_pii: bool = field(default_factory=lambda: _bool("SCRUB_PII", True))                        # (19)
 
     # --- SMTP ---
     smtp_host: "str | None" = field(default_factory=lambda: _str("SMTP_HOST"))

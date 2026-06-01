@@ -93,6 +93,29 @@ class ESClient:
         # unerreichbar, aber zur Sicherheit:
         return {"total": 0, "levels": {}, "error_messages": {}}
 
+    def fetch_samples(self, start_iso: str, end_iso: str, size: int, field: str) -> list:
+        """Jüngste Fehler-Logzeilen (nur das angegebene Feld) als LLM-Kontext (Feature 14)."""
+        cfg = self.cfg
+        body = {
+            "size": max(0, size),
+            "query": {"bool": {
+                "must": [{"range": {cfg.timestamp_field: {"gte": start_iso, "lt": end_iso}}}],
+                "filter": [{"terms": {cfg.level_field: cfg.error_levels}}],
+            }},
+            "sort": [{cfg.timestamp_field: {"order": "desc"}}],
+            "_source": [field],
+        }
+        try:
+            resp = self._search(body)
+        except ESError:
+            return []  # Samples sind optional -> nie den Zyklus killen
+        out = []
+        for h in resp.get("hits", {}).get("hits", []):
+            val = (h.get("_source") or {}).get(field)
+            if val:
+                out.append(str(val)[:300])
+        return out
+
     def ensure_alert_template(self, prefix: str) -> None:
         """Index-Template für die Alert-Indizes: replicas=0 (Single-Node bleibt green)."""
         name = f"{prefix}-template"

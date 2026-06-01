@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Config
 from .es_client import ESClient, ESError
-from . import rules, analyzer, notifier, state, health, alerts
+from . import rules, analyzer, notifier, state, health, alerts, scrub
 from . import fingerprint as fp
 
 log = logging.getLogger("log-watcher")
@@ -44,6 +44,12 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     base_start, base_end = _baseline_window(cfg, now, win)
     current = es.aggregate_window(_iso(now - win), _iso(now))
     baseline = es.aggregate_window(_iso(base_start), _iso(base_end))
+
+    # PII/Secrets aus den Message-Templates entfernen, bevor sie in LLM/Mail/ES gehen (Feature 19).
+    if cfg.scrub_pii:
+        current["error_messages"] = scrub.scrub_messages(current.get("error_messages", {}))
+        baseline["error_messages"] = scrub.scrub_messages(baseline.get("error_messages", {}))
+
     log.info("Fenster: total=%s levels=%s | Baseline(%s): total=%s",
              current["total"], current["levels"], cfg.baseline_mode, baseline["total"])
 
@@ -67,7 +73,27 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         log.info("Unterdrückt (Cooldown aktiv für Signatur %s).", sig)
         return
 
-    assessment = analyzer.assess(cfg, current, baseline, signals)
+    # Verdict-Cache (12): identische Signatur innerhalb der TTL nicht erneut (teuer) bewerten.
+    ttl = cfg.llm_verdict_ttl_hours * 3600
+    assessment = state.get_cached_verdict(st, cfg.name, sig, ttl, now_ts)
+    if assessment is not None:
+        log.info("Verdict-Cache-Treffer für Signatur %s.", sig)
+    else:
+        day = now.strftime("%Y-%m-%d")
+        use_llm = bool(cfg.anthropic_api_key) and state.llm_calls_remaining(st, day, cfg.llm_max_calls_per_day) > 0
+        if cfg.anthropic_api_key and not use_llm:
+            log.warning("LLM-Tagesbudget (%s) erschöpft -> regelbasiert.", cfg.llm_max_calls_per_day)
+        # Beispiel-Logzeilen nur holen, wenn der LLM wirklich läuft (Feature 14), dann redigieren (19).
+        samples = []
+        if use_llm and cfg.include_samples:
+            samples = es.fetch_samples(_iso(now - win), _iso(now), cfg.sample_size, cfg.sample_field)
+            if cfg.scrub_pii:
+                samples = [scrub.scrub(s) for s in samples]
+        assessment = analyzer.assess(cfg, current, baseline, signals, samples=samples, use_llm=use_llm)
+        if assessment.get("llm_used"):
+            state.record_llm_call(st, day, assessment.get("llm_tokens", 0))
+        state.put_verdict(st, cfg.name, sig, assessment, now_ts)
+
     log.info("Beurteilung: anomalous=%s severity=%s llm=%s",
              assessment.get("anomalous"), assessment.get("severity"), assessment.get("llm_used"))
 

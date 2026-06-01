@@ -32,13 +32,33 @@ _SYSTEM = (
     "Du bekommst Zähl-Aggregate für ein aktuelles Zeitfenster, das Vorfenster (Baseline) und "
     "die bereits ausgelösten Heuristik-Signale. Entscheide, ob das eine ECHTE, handlungs"
     "bedürftige Auffälligkeit ist (anomalous=true) oder erwartbares Rauschen. Sei konservativ: "
-    "im Zweifel anomalous=false. Fasse knapp und konkret zusammen. Du siehst nur Aggregate/Zähler "
-    "und Message-Templates (keine Rohlogs)."
+    "im Zweifel anomalous=false. Fasse knapp und konkret zusammen. Du siehst Aggregate/Zähler, "
+    "Message-Templates und ggf. einige bereits REDIGIERTE Beispiel-Logzeilen (PII/Secrets entfernt)."
 )
 
 
-def assess(cfg, current, baseline, signals) -> dict:
-    """Gibt {anomalous, severity, summary, suspected_cause, recommended_action, llm_used} zurück."""
+def assess(cfg, current, baseline, signals, samples=None, use_llm=None) -> dict:
+    """Gibt {anomalous, severity, summary, …, llm_used, llm_tokens} zurück.
+
+    use_llm erzwingt/verhindert den LLM-Aufruf (z.B. Budget erschöpft -> rein
+    regelbasiert). samples: bereits redigierte Beispiel-Logzeilen (Feature 14).
+    """
+    if use_llm is None:
+        use_llm = bool(cfg.anthropic_api_key)
+
+    if not use_llm:
+        # Hybrid degradiert sauber: ohne LLM (kein Key / Budget erschöpft) regelbasiert melden.
+        from .rules import overall_severity
+        return {
+            "anomalous": True,
+            "severity": overall_severity(signals),
+            "summary": "Regelbasierte Auffälligkeit (LLM übersprungen).",
+            "suspected_cause": "unklar",
+            "recommended_action": "Logs in Kibana prüfen.",
+            "llm_used": False,
+            "llm_tokens": 0,
+        }
+
     payload = {
         "window_hours": cfg.window_hours,
         "triggered_signals": [
@@ -46,19 +66,8 @@ def assess(cfg, current, baseline, signals) -> dict:
         ],
         "current_window": current,
         "baseline_window": baseline,
+        "sample_log_lines": samples or [],
     }
-
-    if not cfg.anthropic_api_key:
-        # Hybrid degradiert sauber: ohne LLM melden wir rein regelbasiert.
-        from .rules import overall_severity
-        return {
-            "anomalous": True,
-            "severity": overall_severity(signals),
-            "summary": "Regelbasierte Auffälligkeit (LLM übersprungen: kein ANTHROPIC_API_KEY).",
-            "suspected_cause": "unklar",
-            "recommended_action": "Logs in Kibana prüfen.",
-            "llm_used": False,
-        }
 
     import anthropic  # lazy: nur nötig wenn LLM wirklich verwendet wird
 
@@ -75,7 +84,9 @@ def assess(cfg, current, baseline, signals) -> dict:
         }],
     )
     usage = getattr(msg, "usage", None)
+    tokens = 0
     if usage is not None:
+        tokens = (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0)
         log.info("LLM-Verbrauch: in=%s out=%s tokens (model=%s)",
                  getattr(usage, "input_tokens", "?"), getattr(usage, "output_tokens", "?"), cfg.model)
 
@@ -83,8 +94,9 @@ def assess(cfg, current, baseline, signals) -> dict:
         if getattr(block, "type", None) == "tool_use" and block.name == "report_assessment":
             result = dict(block.input)
             result["llm_used"] = True
+            result["llm_tokens"] = tokens
             return result
 
     # tool_choice erzwingt eigentlich einen Tool-Call; Fallback konservativ.
     return {"anomalous": False, "severity": "low",
-            "summary": "LLM lieferte keine strukturierte Antwort.", "llm_used": True}
+            "summary": "LLM lieferte keine strukturierte Antwort.", "llm_used": True, "llm_tokens": tokens}
