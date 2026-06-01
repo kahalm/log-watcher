@@ -59,6 +59,9 @@ Beim Start legt der Watcher ein Index-Template mit `number_of_replicas=0` an (Si
 Top-Fehler-Messages werden als **Array** indiziert (nicht als Objekt mit Message-Text als Feldname),
 um Mapping-Explosionen zu vermeiden.
 
+Ein fertiges **Kibana-Dashboard** (Data View + Visualisierungen + Suche + Dashboard) liegt unter
+[`kibana/log-watcher-dashboard.ndjson`](kibana/) — importierbar via *Stack Management → Saved Objects → Import* (Kibana 8.17).
+
 ## Konfiguration (ENV)
 Siehe `.env.example`. Wichtigste Werte:
 
