@@ -1,0 +1,20 @@
+services:
+  log-watcher:
+    build: .
+    image: log-watcher:latest
+    container_name: log-watcher
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data          # State (Dedupe/Cooldown) persistent
+    networks:
+      - monitored
+
+# Externes Netz, in dem Elasticsearch erreichbar ist.
+# Für den rookhub-Prod-Stack ist das "rookhub_rookhub" (ermittelt via: docker network ls | grep rookhub).
+# Alternativ ES_URL in .env auf die gepublishte Host-Adresse setzen (http://<host>:9200) und
+# diesen networks-Block entfernen.
+networks:
+  monitored:
+    external: true
+    name: ${MONITORED_NETWORK:-rookhub_rookhub}
