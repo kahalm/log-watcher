@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Config
 from .es_client import ESClient, ESError
-from . import rules, analyzer, notifier, state, health
+from . import rules, analyzer, notifier, state, health, alerts
 
 log = logging.getLogger("log-watcher")
 
@@ -60,11 +60,29 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     subject = f"[log-watcher][{severity.upper()}] Auffälligkeit in {', '.join(cfg.es_indices)}"
     text_body = notifier.build_email_body(assessment, signals, current, baseline, cfg)
     html_body = notifier.build_email_html(assessment, signals, current, baseline, cfg)
+
+    emailed = False
     if cfg.dry_run:
         log.warning("DRY_RUN: würde E-Mail senden:\n--- %s ---\n%s", subject, text_body)
     else:
-        notifier.send_email(cfg, subject, text_body, html_body)
-        log.info("E-Mail (HTML+Text) gesendet an %s", cfg.smtp_to)
+        try:
+            notifier.send_email(cfg, subject, text_body, html_body)
+            emailed = True
+            log.info("E-Mail (HTML+Text) gesendet an %s", cfg.smtp_to)
+        except Exception as e:  # noqa: BLE001 — Mail-Fehler darf Indizierung/State nicht verhindern
+            log.error("E-Mail-Versand fehlgeschlagen: %s", e)
+
+        # Alert für die Kibana-Historie zurück nach ES (best-effort, auch wenn die Mail scheiterte).
+        if cfg.index_alerts:
+            try:
+                idx = alerts.alert_index_name(cfg.alert_index_prefix, now)
+                doc = alerts.build_alert_doc(assessment, signals, current, baseline, cfg,
+                                             _iso(now), sig, emailed)
+                es.index_alert(doc, idx)
+                log.info("Alert in ES indiziert (%s)", idx)
+            except ESError as e:
+                log.warning("Alert-Indizierung fehlgeschlagen: %s", e)
+
     state.save_state(cfg.state_file, state.record(st, sig, now_ts))
 
 
@@ -132,6 +150,12 @@ def main() -> int:
              cfg.interval_seconds, cfg.window_hours, cfg.es_indices, cfg.dry_run)
     health.write_heartbeat(cfg.heartbeat_file)
     startup_probe(cfg, es, now)
+
+    if cfg.index_alerts and not cfg.dry_run:
+        try:
+            es.ensure_alert_template(cfg.alert_index_prefix)
+        except ESError as e:
+            log.warning("Alert-Index-Template konnte nicht angelegt werden: %s", e)
 
     if cfg.notify_on_start and not cfg.dry_run:
         try:

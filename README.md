@@ -49,6 +49,16 @@ False-Positives niedrig.
 
 Die Alarm-Mail wird als **HTML** (mit farbigen Severity-Badges + Level-Tabelle Aktuell-vs-Baseline) **plus Plaintext-Fallback** verschickt.
 
+### Alert-Historie in Kibana
+Jeder ausgelöste Alarm wird zusätzlich als Dokument nach ES geschrieben (Index
+`log-watcher-alerts-YYYY.MM`, via `ES_INDEX_ALERTS`/`ES_ALERT_INDEX_PREFIX`), sodass du in
+Kibana eine durchsuchbare Historie + Dashboards bauen kannst. Felder u.a.: `@timestamp`,
+`severity`, `summary`, `suspected_cause`, `recommended_action`, `llm_used`, `emailed`,
+`signals[]`, `window.levels`, `window.top_error_messages[] {message,count}`, `baseline`.
+Beim Start legt der Watcher ein Index-Template mit `number_of_replicas=0` an (Single-Node → green).
+Top-Fehler-Messages werden als **Array** indiziert (nicht als Objekt mit Message-Text als Feldname),
+um Mapping-Explosionen zu vermeiden.
+
 ## Konfiguration (ENV)
 Siehe `.env.example`. Wichtigste Werte:
 

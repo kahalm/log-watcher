@@ -51,6 +51,9 @@ class Config:
     message_field: str = field(default_factory=lambda: _str("ES_MESSAGE_FIELD", "messageTemplate.keyword"))
     error_levels: list = field(default_factory=lambda: _list("ES_ERROR_LEVELS", "Error,Fatal"))
     warn_levels: list = field(default_factory=lambda: _list("ES_WARN_LEVELS", "Warning"))
+    # Alerts zur Kibana-Historie zurück nach ES schreiben:
+    index_alerts: bool = field(default_factory=lambda: _bool("ES_INDEX_ALERTS", True))
+    alert_index_prefix: str = field(default_factory=lambda: _str("ES_ALERT_INDEX_PREFIX", "log-watcher-alerts"))
 
     # --- Fenster / Intervall ---
     window_hours: float = field(default_factory=lambda: _float("WINDOW_HOURS", 6.0))

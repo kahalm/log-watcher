@@ -91,6 +91,26 @@ class ESClient:
         # unerreichbar, aber zur Sicherheit:
         return {"total": 0, "levels": {}, "error_messages": {}}
 
+    def ensure_alert_template(self, prefix: str) -> None:
+        """Index-Template für die Alert-Indizes: replicas=0 (Single-Node bleibt green)."""
+        name = f"{prefix}-template"
+        body = {"index_patterns": [f"{prefix}-*"], "template": {"settings": {"number_of_replicas": 0}}}
+        url = f"{self.cfg.es_url.rstrip('/')}/_index_template/{name}"
+        try:
+            r = requests.put(url, json=body, headers=self._headers(), timeout=30)
+            r.raise_for_status()
+        except requests.RequestException as e:
+            raise ESError(f"Alert-Index-Template fehlgeschlagen: {e}") from e
+
+    def index_alert(self, doc: dict, index: str) -> None:
+        """Schreibt ein Alert-Dokument (für die Kibana-Historie)."""
+        url = f"{self.cfg.es_url.rstrip('/')}/{index}/_doc"
+        try:
+            r = requests.post(url, json=doc, headers=self._headers(), timeout=30)
+            r.raise_for_status()
+        except requests.RequestException as e:
+            raise ESError(f"Alert-Indizierung fehlgeschlagen: {e}") from e
+
     @staticmethod
     def _parse(resp: dict) -> dict:
         aggs = resp.get("aggregations", {})
