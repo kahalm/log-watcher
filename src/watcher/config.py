@@ -105,6 +105,15 @@ class Config:
     health_max_staleness: float = field(default_factory=lambda: _float("HEALTH_MAX_STALENESS_SECONDS", 180.0))
     http_port: int = field(default_factory=lambda: _int("HTTP_PORT", 0))  # 0 = aus (Features 15/16)
 
+    # --- Replay (Feature 18) ---
+    replay_from: "str | None" = field(default_factory=lambda: _str("REPLAY_FROM"))  # ISO, z.B. 2026-05-01T00:00:00
+    replay_to: "str | None" = field(default_factory=lambda: _str("REPLAY_TO"))
+
+    # --- Digest (Feature 4) ---
+    digest_enabled: bool = field(default_factory=lambda: _bool("DIGEST_ENABLED", False))
+    digest_hour: int = field(default_factory=lambda: _int("DIGEST_HOUR_UTC", 7))
+    digest_period_days: int = field(default_factory=lambda: _int("DIGEST_PERIOD_DAYS", 1))
+
     # --- Sonstiges ---
     dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))
     notify_on_start: bool = field(default_factory=lambda: _bool("NOTIFY_ON_START", False))
@@ -113,6 +122,16 @@ class Config:
     @property
     def window_seconds(self) -> float:
         return self.window_hours * 3600
+
+    def with_overrides(self, overrides: dict) -> "Config":
+        """Setzt bekannte Felder aus einem Dict (YAML) — unbekannte Keys werden ignoriert."""
+        import logging
+        for k, v in (overrides or {}).items():
+            if hasattr(self, k):
+                setattr(self, k, v)
+            else:
+                logging.getLogger("log-watcher").warning("Unbekannter Config-Key ignoriert: %s", k)
+        return self
 
     def validate(self) -> "list[str]":
         errs = []
@@ -128,3 +147,25 @@ class Config:
             if not self.smtp_to:
                 errs.append("SMTP_TO fehlt")
         return errs
+
+
+def load_targets() -> "list[Config]":
+    """Eine oder mehrere Ziel-Konfigurationen (Feature 17).
+
+    Ohne CONFIG_FILE: genau ein Target aus den ENV-Defaults.
+    Mit CONFIG_FILE (YAML): `defaults` werden auf jedes Target angewandt, dann die
+    target-spezifischen Keys. Jedes Target erbt zunächst die ENV-Defaults.
+    """
+    path = _str("CONFIG_FILE")
+    if not path:
+        return [Config()]
+    import yaml
+    with open(path, encoding="utf-8") as f:
+        doc = yaml.safe_load(f) or {}
+    defaults = doc.get("defaults", {}) or {}
+    targets = doc.get("targets") or [{}]
+    out = []
+    for t in targets:
+        out.append(Config().with_overrides(defaults).with_overrides(t))
+    return out
+

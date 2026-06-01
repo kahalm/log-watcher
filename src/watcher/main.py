@@ -6,11 +6,11 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from .config import Config
+from .config import Config, load_targets
 from .es_client import ESClient, ESError
-from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver
+from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver, digest
 from . import fingerprint as fp
 from .metrics import METRICS
 
@@ -169,6 +169,66 @@ def selftest(cfg: Config, es: ESClient, now: datetime) -> int:
     return 0
 
 
+def _parse_iso(s: str) -> datetime:
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def replay(cfg: Config, es: ESClient, start_dt: datetime, end_dt: datetime) -> int:
+    """Regeln über einen vergangenen Zeitraum testen (Feature 18): pro Fenster die
+    Signale loggen — ohne LLM, Mail, ES-Schreiben oder State."""
+    win = timedelta(hours=cfg.window_hours)
+    log.info("REPLAY [%s]: %s .. %s (Fenster %sh)", cfg.name, _iso(start_dt), _iso(end_dt), cfg.window_hours)
+    cursor = start_dt + win
+    fired = 0
+    while cursor <= end_dt and not _stop.is_set():
+        try:
+            current = es.aggregate_window(_iso(cursor - win), _iso(cursor))
+            b_start, b_end = _baseline_window(cfg, cursor, win)
+            baseline = es.aggregate_window(_iso(b_start), _iso(b_end))
+        except ESError as e:
+            log.error("REPLAY: ES-Fehler: %s", e)
+            return 1
+        if cfg.scrub_pii:
+            current["error_messages"] = scrub.scrub_messages(current.get("error_messages", {}))
+            baseline["error_messages"] = scrub.scrub_messages(baseline.get("error_messages", {}))
+        signals = rules.evaluate(current, baseline, cfg)
+        if signals:
+            fired += 1
+            log.info("REPLAY %s: %s", _iso(cursor), " | ".join(f"{s.kind}: {s.detail}" for s in signals))
+        cursor += win
+    log.info("REPLAY [%s] fertig: %d Fenster mit Signalen.", cfg.name, fired)
+    return 0
+
+
+def _maybe_digest(glob: Config, clients, st: dict, now: datetime) -> None:
+    """Sendet einmal pro Periode (nach DIGEST_HOUR_UTC) eine Zusammenfassung (Feature 4)."""
+    if not glob.digest_enabled:
+        return
+    last = st.get("last_digest")
+    if last is not None:
+        try:
+            if (now.date() - date.fromisoformat(last)).days < glob.digest_period_days:
+                return
+        except ValueError:
+            pass
+    if now.hour < glob.digest_hour:
+        return
+    summaries = [digest.target_summary(cfg, es, glob.digest_period_days * 86400, now, _iso)
+                 for cfg, es in clients]
+    subject, text_body, html_body = digest.build(summaries, glob.digest_period_days)
+    if glob.dry_run:
+        log.warning("DRY_RUN: würde Digest senden:\n--- %s ---\n%s", subject, text_body)
+    else:
+        try:
+            notifier.send_email(glob, subject, text_body, html_body)
+            log.info("Digest gesendet an %s", glob.smtp_to)
+        except Exception as e:  # noqa: BLE001
+            log.error("Digest-Versand fehlgeschlagen: %s", e)
+    st["last_digest"] = now.date().isoformat()
+    state.save_state(glob.state_file, st)
+
+
 def _sleep_with_heartbeat(cfg: Config, seconds: float) -> None:
     """In Häppchen schlafen, dabei Heartbeat aktualisieren und auf Stop-Signal reagieren."""
     deadline = time.monotonic() + seconds
@@ -185,52 +245,74 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    cfg = Config()
-    errs = cfg.validate()
-    if errs:
-        for e in errs:
-            log.error("Config-Fehler: %s", e)
+    targets = load_targets()
+    glob = targets[0]  # globale Loop-Settings (Intervall/Heartbeat/HTTP/State/Digest/Modi)
+
+    bad = False
+    for cfg in targets:
+        for e in cfg.validate():
+            log.error("Config-Fehler [%s]: %s", cfg.name, e)
+            bad = True
+    if bad:
         return 1
 
-    es = ESClient(cfg)
     now = datetime.now(timezone.utc)
+    clients = [(cfg, ESClient(cfg)) for cfg in targets]
 
-    if cfg.selftest:
-        return selftest(cfg, es, now)
+    # Replay-Modus (Feature 18): über alle Targets, dann beenden.
+    if glob.replay_from:
+        end_dt = _parse_iso(glob.replay_to) if glob.replay_to else now
+        rc = 0
+        for cfg, es in clients:
+            rc |= replay(cfg, es, _parse_iso(glob.replay_from), end_dt)
+        return rc
 
-    log.info("log-watcher gestartet (intervall=%ss, fenster=%sh, indices=%s, dry_run=%s)",
-             cfg.interval_seconds, cfg.window_hours, cfg.es_indices, cfg.dry_run)
+    if glob.selftest:
+        rc = 0
+        for cfg, es in clients:
+            rc |= selftest(cfg, es, now)
+        return rc
+
+    log.info("log-watcher gestartet (targets=%s, intervall=%ss, fenster=%sh, dry_run=%s)",
+             [c.name for c in targets], glob.interval_seconds, glob.window_hours, glob.dry_run)
     METRICS.start(now.timestamp())
-    httpserver.start_http_server(cfg)
-    health.write_heartbeat(cfg.heartbeat_file)
-    startup_probe(cfg, es, now)
+    httpserver.start_http_server(glob)
+    health.write_heartbeat(glob.heartbeat_file)
 
-    if cfg.index_alerts and not cfg.dry_run:
-        try:
-            es.ensure_alert_template(cfg.alert_index_prefix)
-        except ESError as e:
-            log.warning("Alert-Index-Template konnte nicht angelegt werden: %s", e)
+    for cfg, es in clients:
+        startup_probe(cfg, es, now)
+        if cfg.index_alerts and not cfg.dry_run:
+            try:
+                es.ensure_alert_template(cfg.alert_index_prefix)
+            except ESError as e:
+                log.warning("Alert-Index-Template [%s]: %s", cfg.name, e)
 
-    if cfg.notify_on_start and not cfg.dry_run:
+    if glob.notify_on_start and not glob.dry_run:
         try:
-            notifier.send_email(cfg, "[log-watcher] gestartet",
-                                f"log-watcher läuft. Intervall {cfg.window_hours}h, Indices {cfg.es_indices}.")
+            notifier.send_email(glob, "[log-watcher] gestartet",
+                                f"log-watcher läuft. Targets: {[c.name for c in targets]}.")
         except Exception as e:  # noqa: BLE001 — Start-Mail darf den Start nicht verhindern
             log.warning("Start-Mail fehlgeschlagen: %s", e)
 
     while not _stop.is_set():
+        cycle_now = datetime.now(timezone.utc)
+        for cfg, es in clients:
+            try:
+                run_cycle(cfg, es, cycle_now)
+            except ESError as e:
+                METRICS.inc("es_errors_total")
+                log.error("ES-Fehler [%s]: %s", cfg.name, e)
+            except Exception:
+                log.exception("Unerwarteter Fehler im Zyklus [%s]", cfg.name)
         try:
-            run_cycle(cfg, es, datetime.now(timezone.utc))
-        except ESError as e:
-            METRICS.inc("es_errors_total")
-            log.error("ES-Fehler: %s", e)
+            _maybe_digest(glob, clients, state.load_state(glob.state_file), cycle_now)
         except Exception:
-            log.exception("Unerwarteter Fehler im Zyklus")
+            log.exception("Digest fehlgeschlagen")
         METRICS.mark_cycle(time.time())
-        health.write_heartbeat(cfg.heartbeat_file)
-        if cfg.run_once:
+        health.write_heartbeat(glob.heartbeat_file)
+        if glob.run_once:
             return 0
-        _sleep_with_heartbeat(cfg, cfg.interval_seconds)
+        _sleep_with_heartbeat(glob, glob.interval_seconds)
 
     log.info("Sauber beendet.")
     return 0

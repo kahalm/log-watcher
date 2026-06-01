@@ -44,8 +44,9 @@ False-Positives niedrig.
 | `error_spike` | medium | `Error/Fatal`-Anzahl ≥ `MIN_ERRORS` **und** ≥ `ERROR_SPIKE_FACTOR` × Vorfenster |
 | `warn_spike` | low | `Warning`-Anzahl ≥ `MIN_WARNINGS` **und** ≥ `WARN_SPIKE_FACTOR` × Vorfenster (lauter → höhere Schwelle, via `ALERT_ON_WARN_SPIKE` abschaltbar) |
 | `fatal` | high | mind. ein `Fatal`/`Critical`-Eintrag |
-| `new_errors` | medium | Fehler-Message-Templates, die im Vorfenster nicht vorkamen |
-| `ingestion_stopped` | high | vorher Logs, jetzt 0 → Pipeline evtl. tot |
+| `new_errors` | medium | per Fingerprint gruppierte Fehler, die *erstmalig* (nicht nur seit Vorfenster) auftreten |
+| `ingestion_stopped` | high | gesamt 0 Logs → Pipeline evtl. tot |
+| `index_silent` | high | ein Index verstummt, während andere weiterloggen (Teil-Ausfall) |
 
 Die Alarm-Mail wird als **HTML** (mit farbigen Severity-Badges + Level-Tabelle Aktuell-vs-Baseline) **plus Plaintext-Fallback** verschickt.
 
@@ -123,6 +124,20 @@ ES_URL=http://localhost:9200 SELFTEST=true PYTHONPATH=src python -m watcher.main
    docker compose logs -f
    ```
 
+## Weitere Features
+- **Fingerprinting (8):** variable Teile (Zahlen/GUIDs/Hex/Quotes) werden normalisiert, sodass
+  „timeout 30s/45s" als eine Signatur zählen.
+- **Persistente First-seen (9):** eine Signatur gilt nur beim allerersten Auftreten als „neu".
+- **Per-Index-Stille (10)** und **saisonale Baseline (7):** `BASELINE_MODE=previous|yesterday|last_week`.
+- **LLM-Budget (11)** `LLM_MAX_CALLS_PER_DAY` + **Verdict-Cache (12)** `LLM_VERDICT_TTL_HOURS` → spart Calls.
+- **Sample-Logs (14):** einige *redigierte* Beispielzeilen gehen an den LLM für die Ursachenanalyse.
+- **PII-Scrubbing (19):** `SCRUB_PII` entfernt E-Mails/IPs/Tokens vor LLM/Mail/ES.
+- **HTTP (15/16):** `HTTP_PORT>0` → `/healthz`, `/status` (JSON), `/metrics` (Prometheus).
+- **Multi-Target (17):** `CONFIG_FILE=…yaml` überwacht mehrere Index-Gruppen mit eigenen Schwellen
+  (siehe `config.example.yaml`); State/Alerts/Cooldown sind pro Target getrennt.
+- **Replay (18):** `REPLAY_FROM`/`REPLAY_TO` testet die Regeln über einen vergangenen Zeitraum (nur Log-Ausgabe).
+- **Digest (4):** `DIGEST_ENABLED=true` schickt eine periodische Zusammenfassung (`DIGEST_HOUR_UTC`, `DIGEST_PERIOD_DAYS`).
+
 ## Erweiterbar
-Generisch genug, um später **beliebige** Stacks zu überwachen — einfach `ES_INDICES`
-(und ggf. die Feld-Namen `ES_LEVEL_FIELD`/`ES_MESSAGE_FIELD`) anpassen.
+Generisch genug, um **beliebige** Stacks zu überwachen — `ES_INDICES` (und ggf. `ES_LEVEL_FIELD`/
+`ES_MESSAGE_FIELD`) anpassen, oder mehrere Targets per `CONFIG_FILE`.

@@ -1,0 +1,37 @@
+# Multi-Target-Konfiguration (Feature 17) — aktiviert via CONFIG_FILE=/data/config.yaml
+#
+# `defaults` werden auf JEDES Target angewandt; danach greifen die target-spezifischen
+# Keys. Jedes Target erbt zunächst die ENV-Defaults (alles aus .env). Globale Loop-/
+# Server-Settings (Intervall, Heartbeat, HTTP-Port, State-Datei, Digest) werden vom
+# ERSTEN Target übernommen — am besten in `defaults` setzen.
+#
+# Feldnamen = die ENV-Keys in Kleinbuchstaben (z.B. ES_INDICES -> es_indices).
+
+defaults:
+  window_hours: 6
+  interval_seconds: 21600
+  cooldown_hours: 12
+  # gemeinsamer SMTP-/State-/HTTP-Teil:
+  smtp_host: smtp.example.com
+  smtp_from: log-watcher@oberschmid.homes
+  smtp_to: [p.oberschmid@cp-solutions.at]
+  state_file: /data/state.json
+  heartbeat_file: /data/heartbeat
+  http_port: 8080
+  digest_enabled: true
+  digest_hour: 7
+
+targets:
+  - name: rookhub
+    es_indices: [rookhub-logs-*, crawler-logs-*]
+    alert_index_prefix: log-watcher-alerts-rookhub
+
+  - name: lernkompass
+    es_indices: [lernkompass-logs-*]
+    min_errors: 10
+    alert_index_prefix: log-watcher-alerts-lernkompass
+
+  - name: piratechess
+    es_indices: [piratechess-logs-*]
+    baseline_mode: last_week     # saisonaler Vergleich
+    alert_index_prefix: log-watcher-alerts-piratechess

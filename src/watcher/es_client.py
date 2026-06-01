@@ -116,6 +116,18 @@ class ESClient:
                 out.append(str(val)[:300])
         return out
 
+    def count(self, index: str, query: dict) -> int:
+        """_count gegen ein (ggf. nicht existierendes) Index-Pattern. 0 bei Fehler/leer."""
+        url = f"{self.cfg.es_url.rstrip('/')}/{index}/_count"
+        try:
+            r = requests.post(url, json={"query": query}, headers=self._headers(), timeout=15)
+            if r.status_code == 404:
+                return 0
+            r.raise_for_status()
+            return int(r.json().get("count", 0))
+        except (requests.RequestException, ValueError):
+            return 0
+
     def ensure_alert_template(self, prefix: str) -> None:
         """Index-Template für die Alert-Indizes: replicas=0 (Single-Node bleibt green)."""
         name = f"{prefix}-template"

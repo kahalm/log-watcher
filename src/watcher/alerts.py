@@ -15,6 +15,7 @@ def build_alert_doc(assessment, signals, current, baseline, cfg, ts_iso, signatu
     """
     return {
         "@timestamp": ts_iso,
+        "target": getattr(cfg, "name", "default"),
         "severity": assessment.get("severity"),
         "summary": assessment.get("summary"),
         "suspected_cause": assessment.get("suspected_cause"),
