@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import sys
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
+from . import __version__
 from .config import Config, load_targets
 from .es_client import ESClient, ESError
 from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver, digest, discord_notify
@@ -26,6 +28,23 @@ def _handle_signal(signum, _frame):
 
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _build_time_str() -> str:
+    raw = os.environ.get("LOGWATCHER_BUILD_TIME", "")
+    if not raw or raw == "unknown":
+        return "unbekannt"
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return dt.strftime("%H:%M am %d.%m.%Y") + " UTC"
+    except ValueError:
+        return raw
+
+
+def _startup_message(targets) -> str:
+    return (f"🟢 log-watcher online — v{__version__}, "
+            f"Image gebaut um {_build_time_str()}. "
+            f"Targets: {[c.name for c in targets]}")
 
 
 def _baseline_window(cfg: Config, now: datetime, win: timedelta):
@@ -303,7 +322,7 @@ def main() -> int:
                 log.warning("Alert-Index-Template [%s]: %s", cfg.name, e)
 
     if glob.notify_on_start and not glob.dry_run:
-        start_msg = f"log-watcher läuft. Targets: {[c.name for c in targets]}."
+        start_msg = _startup_message(targets)
         if glob.smtp_host:
             try:
                 notifier.send_email(glob, "[log-watcher] gestartet", start_msg)
@@ -311,7 +330,7 @@ def main() -> int:
                 log.warning("Start-Mail fehlgeschlagen: %s", e)
         if glob.discord_webhook_url:
             try:
-                discord_notify.post_text(glob.discord_webhook_url, "✅ " + start_msg)
+                discord_notify.post_text(glob.discord_webhook_url, start_msg)
             except Exception as e:  # noqa: BLE001
                 log.warning("Start-Discord fehlgeschlagen: %s", e)
 

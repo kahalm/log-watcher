@@ -4,6 +4,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/src
 
+# Build-Zeitstempel (von der CI gesetzt) -> zur Laufzeit lesbar (Start-Meldung).
+ARG BUILD_TIME=unknown
+ENV LOGWATCHER_BUILD_TIME=$BUILD_TIME
+
 WORKDIR /app
 
 COPY requirements.txt .
