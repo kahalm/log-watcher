@@ -114,8 +114,11 @@ ES_URL=http://localhost:9200 SELFTEST=true PYTHONPATH=src python -m watcher.main
 - Image: `ghcr.io/kahalm/log-watcher`.
 
 ## Deploy (Docker, Homelab — turnkey)
-Eine fertige `.env` liegt bei (rookhub-Defaults: ES intern, Netz `rookhub_rookhub`, `HTTP_PORT=8080`,
-**`DRY_RUN=true`** für sicheren Start). Nur einen **Alert-Kanal** eintragen:
+**Eigenständiger Stack** (eigenes Bridge-Netz, kein gemeinsames Netz mit anderen Stacks). ES wird
+über den **Host** erreicht: der ES-Container publisht `:9200`, und `compose.yaml` mappt
+`host.docker.internal` (host-gateway) → `ES_URL=http://host.docker.internal:9200`.
+
+Eine fertige `.env` liegt bei (`HTTP_PORT=8080`, **`DRY_RUN=true`** für sicheren Start). Nur einen **Alert-Kanal** eintragen:
 ```ini
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/…   # und/oder SMTP_*
 # ANTHROPIC_API_KEY=sk-ant-…   # optional; ohne -> rein regelbasiert

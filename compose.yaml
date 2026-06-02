@@ -1,5 +1,10 @@
+# Eigenständiger Stack — KEIN gemeinsames Netz mit rookhub o.ä.
 # Deployment: nutzt das von der CI gebaute GHCR-Image (Watchtower zieht :latest nach einem Tag).
 # Lokal bauen: `docker build -t ghcr.io/kahalm/log-watcher:latest .` ODER die build-Zeile einkommentieren.
+#
+# Elasticsearch wird NICHT über ein gemeinsames Docker-Netz erreicht, sondern über den Host:
+# der ES-Container publisht :9200 auf den Host, und host.docker.internal (host-gateway) zeigt
+# vom log-watcher-Container auf den Docker-Host. -> ES_URL=http://host.docker.internal:9200 (.env)
 services:
   log-watcher:
     image: ghcr.io/kahalm/log-watcher:latest
@@ -10,6 +15,8 @@ services:
     stop_grace_period: 20s    # SIGTERM -> sauberes Herunterfahren (Loop bricht ab)
     volumes:
       - ./data:/data          # State (Dedupe/Cooldown/First-seen) + Heartbeat persistent
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # erreicht den Docker-Host (für exposed ES :9200)
     # HTTP (/healthz /status /metrics) optional auf den Host veröffentlichen (HTTP_PORT in .env):
     # ports:
     #   - "8080:8080"
@@ -21,12 +28,4 @@ services:
       retries: 3
     # labels:
     #   - com.centurylinklabs.watchtower.enable=true   # nur falls deine Watchtower label-gesteuert ist
-    networks:
-      - monitored
-
-# Externes Netz, in dem Elasticsearch erreichbar ist (rookhub-Prod: "rookhub_rookhub").
-# Alternativ ES_URL in .env auf http://<host>:9200 setzen und diesen Block entfernen.
-networks:
-  monitored:
-    external: true
-    name: ${MONITORED_NETWORK:-rookhub_rookhub}
+# Eigenes (per-Projekt-)Bridge-Netz — keine externen/fremden Netze.
