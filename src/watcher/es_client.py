@@ -81,8 +81,8 @@ class ESClient:
         total_only = {"size": 0, "track_total_hits": True, "query": q}
 
         for body, note in ((full, None),
-                           (levels_only, f"message_field '{cfg.message_field}' nicht aggregierbar?"),
-                           (total_only, f"level_field '{cfg.level_field}' nicht aggregierbar?")):
+                           (levels_only, "Fallback ohne Top-Messages (Feld nicht aggregierbar?)"),
+                           (total_only, "Fallback nur Gesamtzahl (Level-Aggregation nicht möglich?)")):
             try:
                 return self._parse(self._search(body))
             except ESError as e:

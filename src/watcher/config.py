@@ -52,7 +52,7 @@ class Config:
     es_user: "str | None" = field(default_factory=lambda: _str("ES_USER"))
     es_pass: "str | None" = field(default_factory=lambda: _str("ES_PASSWORD"))
     timestamp_field: str = field(default_factory=lambda: _str("ES_TIMESTAMP_FIELD", "@timestamp"))
-    level_field: str = field(default_factory=lambda: _str("ES_LEVEL_FIELD", "level"))
+    level_field: str = field(default_factory=lambda: _str("ES_LEVEL_FIELD", "level.keyword"))
     message_field: str = field(default_factory=lambda: _str("ES_MESSAGE_FIELD", "messageTemplate.keyword"))
     error_levels: list = field(default_factory=lambda: _list("ES_ERROR_LEVELS", "Error,Fatal"))
     warn_levels: list = field(default_factory=lambda: _list("ES_WARN_LEVELS", "Warning"))
