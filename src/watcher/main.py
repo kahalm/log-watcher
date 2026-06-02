@@ -323,6 +323,7 @@ def main() -> int:
 
     if glob.notify_on_start and not glob.dry_run:
         start_msg = _startup_message(targets)
+        log.info("Start-Meldung: %s", start_msg)
         if glob.smtp_host:
             try:
                 notifier.send_email(glob, "[log-watcher] gestartet", start_msg)
