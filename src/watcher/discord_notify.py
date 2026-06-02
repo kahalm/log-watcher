@@ -6,9 +6,13 @@ import logging
 import urllib.error
 import urllib.request
 
+from . import __version__
+
 log = logging.getLogger("log-watcher")
 
 _COLOR = {"low": 0x6C757D, "medium": 0xE0A800, "high": 0xDC3545}
+# Discord/Cloudflare blockt den Standard-urllib-User-Agent (403, Cloudflare 1010) -> eigenen setzen.
+_UA = f"log-watcher/{__version__} (+https://github.com/kahalm/log-watcher)"
 
 
 def build_alert_payload(subject: str, assessment, signals, current, baseline, cfg) -> dict:
@@ -35,7 +39,8 @@ def post(webhook_url: str, payload: dict) -> int:
     """POSTet ein Webhook-Payload. Wirft bei HTTP-/Netzfehler (Caller fängt best-effort)."""
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        webhook_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        webhook_url, data=data,
+        headers={"Content-Type": "application/json", "User-Agent": _UA}, method="POST")
     with urllib.request.urlopen(req, timeout=15) as r:
         return getattr(r, "status", 0)
 

@@ -41,11 +41,20 @@ def test_post_calls_webhook(monkeypatch):
         captured["method"] = req.get_method()
         return FakeResp()
 
-    monkeypatch.setattr(discord_notify.urllib.request, "urlopen", fake_urlopen)
+    def fake_urlopen2(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["data"] = req.data
+        captured["method"] = req.get_method()
+        captured["ua"] = req.get_header("User-agent")
+        return FakeResp()
+
+    monkeypatch.setattr(discord_notify.urllib.request, "urlopen", fake_urlopen2)
     discord_notify.post_text("https://discord.com/api/webhooks/xyz", "hallo")
     assert captured["url"] == "https://discord.com/api/webhooks/xyz"
     assert captured["method"] == "POST"
     assert json.loads(captured["data"]) == {"content": "hallo"}
+    # Discord verlangt einen User-Agent (sonst Cloudflare 403/1010):
+    assert captured["ua"] and "log-watcher" in captured["ua"]
 
 
 def test_validate_accepts_discord_only():
