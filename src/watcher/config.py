@@ -95,6 +95,9 @@ class Config:
     smtp_to: list = field(default_factory=lambda: _list("SMTP_TO", ""))
     smtp_tls: bool = field(default_factory=lambda: _bool("SMTP_TLS", True))
 
+    # --- Discord-Webhook (zusätzlicher/alternativer Kanal) ---
+    discord_webhook_url: "str | None" = field(default_factory=lambda: _str("DISCORD_WEBHOOK_URL"))
+
     # --- State / Dedupe ---
     state_file: str = field(default_factory=lambda: _str("STATE_FILE", "/data/state.json"))
     cooldown_hours: float = field(default_factory=lambda: _float("COOLDOWN_HOURS", 12.0))
@@ -140,12 +143,12 @@ class Config:
         if not self.es_indices:
             errs.append("ES_INDICES fehlt")
         if not self.dry_run:
-            if not self.smtp_host:
-                errs.append("SMTP_HOST fehlt (oder DRY_RUN=true setzen)")
-            if not self.smtp_from:
-                errs.append("SMTP_FROM fehlt")
-            if not self.smtp_to:
-                errs.append("SMTP_TO fehlt")
+            has_email = bool(self.smtp_host and self.smtp_from and self.smtp_to)
+            has_discord = bool(self.discord_webhook_url)
+            if not has_email and not has_discord:
+                errs.append("Kein Alert-Kanal: SMTP_HOST/SMTP_FROM/SMTP_TO oder DISCORD_WEBHOOK_URL setzen (oder DRY_RUN=true).")
+            elif self.smtp_host and not (self.smtp_from and self.smtp_to):
+                errs.append("SMTP_HOST gesetzt, aber SMTP_FROM/SMTP_TO fehlen.")
         return errs
 
 

@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from .config import Config, load_targets
 from .es_client import ESClient, ESError
-from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver, digest
+from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver, digest, discord_notify
 from . import fingerprint as fp
 from .metrics import METRICS
 
@@ -114,16 +114,24 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
 
     emailed = False
     if cfg.dry_run:
-        log.warning("DRY_RUN: würde E-Mail senden:\n--- %s ---\n%s", subject, text_body)
+        log.warning("DRY_RUN: würde alarmieren:\n--- %s ---\n%s", subject, text_body)
     else:
-        try:
-            notifier.send_email(cfg, subject, text_body, html_body)
-            emailed = True
-            log.info("E-Mail (HTML+Text) gesendet an %s", cfg.smtp_to)
-        except Exception as e:  # noqa: BLE001 — Mail-Fehler darf Indizierung/State nicht verhindern
-            log.error("E-Mail-Versand fehlgeschlagen: %s", e)
+        if cfg.smtp_host:
+            try:
+                notifier.send_email(cfg, subject, text_body, html_body)
+                emailed = True
+                log.info("E-Mail (HTML+Text) gesendet an %s", cfg.smtp_to)
+            except Exception as e:  # noqa: BLE001 — Kanal-Fehler darf Indizierung/State nicht verhindern
+                log.error("E-Mail-Versand fehlgeschlagen: %s", e)
+        if cfg.discord_webhook_url:
+            try:
+                discord_notify.post(cfg.discord_webhook_url,
+                                    discord_notify.build_alert_payload(subject, assessment, signals, current, baseline, cfg))
+                log.info("Discord-Alert gesendet.")
+            except Exception as e:  # noqa: BLE001
+                log.error("Discord-Versand fehlgeschlagen: %s", e)
 
-        # Alert für die Kibana-Historie zurück nach ES (best-effort, auch wenn die Mail scheiterte).
+        # Alert für die Kibana-Historie zurück nach ES (best-effort, auch wenn ein Kanal scheiterte).
         if cfg.index_alerts:
             try:
                 idx = alerts.alert_index_name(cfg.alert_index_prefix, now)
@@ -220,11 +228,18 @@ def _maybe_digest(glob: Config, clients, st: dict, now: datetime) -> None:
     if glob.dry_run:
         log.warning("DRY_RUN: würde Digest senden:\n--- %s ---\n%s", subject, text_body)
     else:
-        try:
-            notifier.send_email(glob, subject, text_body, html_body)
-            log.info("Digest gesendet an %s", glob.smtp_to)
-        except Exception as e:  # noqa: BLE001
-            log.error("Digest-Versand fehlgeschlagen: %s", e)
+        if glob.smtp_host:
+            try:
+                notifier.send_email(glob, subject, text_body, html_body)
+                log.info("Digest-Mail gesendet an %s", glob.smtp_to)
+            except Exception as e:  # noqa: BLE001
+                log.error("Digest-Mail fehlgeschlagen: %s", e)
+        if glob.discord_webhook_url:
+            try:
+                discord_notify.post_text(glob.discord_webhook_url, f"**{subject}**\n```\n{text_body[:1800]}\n```")
+                log.info("Digest an Discord gesendet.")
+            except Exception as e:  # noqa: BLE001
+                log.error("Digest-Discord fehlgeschlagen: %s", e)
     st["last_digest"] = now.date().isoformat()
     state.save_state(glob.state_file, st)
 
@@ -288,11 +303,17 @@ def main() -> int:
                 log.warning("Alert-Index-Template [%s]: %s", cfg.name, e)
 
     if glob.notify_on_start and not glob.dry_run:
-        try:
-            notifier.send_email(glob, "[log-watcher] gestartet",
-                                f"log-watcher läuft. Targets: {[c.name for c in targets]}.")
-        except Exception as e:  # noqa: BLE001 — Start-Mail darf den Start nicht verhindern
-            log.warning("Start-Mail fehlgeschlagen: %s", e)
+        start_msg = f"log-watcher läuft. Targets: {[c.name for c in targets]}."
+        if glob.smtp_host:
+            try:
+                notifier.send_email(glob, "[log-watcher] gestartet", start_msg)
+            except Exception as e:  # noqa: BLE001 — Start-Meldung darf den Start nicht verhindern
+                log.warning("Start-Mail fehlgeschlagen: %s", e)
+        if glob.discord_webhook_url:
+            try:
+                discord_notify.post_text(glob.discord_webhook_url, "✅ " + start_msg)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Start-Discord fehlgeschlagen: %s", e)
 
     while not _stop.is_set():
         cycle_now = datetime.now(timezone.utc)

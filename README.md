@@ -50,6 +50,10 @@ False-Positives niedrig.
 
 Die Alarm-Mail wird als **HTML** (mit farbigen Severity-Badges + Level-Tabelle Aktuell-vs-Baseline) **plus Plaintext-Fallback** verschickt.
 
+**Kanäle:** E-Mail (SMTP) und/oder **Discord** (`DISCORD_WEBHOOK_URL` → farbiges Embed). Mindestens
+ein Kanal muss konfiguriert sein (außer `DRY_RUN=true`); Discord reicht auch allein. Alerts, Digest
+und die optionale Start-Meldung gehen an alle konfigurierten Kanäle.
+
 ### Alert-Historie in Kibana
 Jeder ausgelöste Alarm wird zusätzlich als Dokument nach ES geschrieben (Index
 `log-watcher-alerts-YYYY.MM`, via `ES_INDEX_ALERTS`/`ES_ALERT_INDEX_PREFIX`), sodass du in
