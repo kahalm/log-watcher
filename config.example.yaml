@@ -1,20 +1,23 @@
 # Multi-Target-Konfiguration (Feature 17) — aktiviert via CONFIG_FILE=/data/config.yaml
 #
-# `defaults` werden auf JEDES Target angewandt; danach greifen die target-spezifischen
-# Keys. Jedes Target erbt zunächst die ENV-Defaults (alles aus .env). Globale Loop-/
-# Server-Settings (Intervall, Heartbeat, HTTP-Port, State-Datei, Digest) werden vom
-# ERSTEN Target übernommen — am besten in `defaults` setzen.
+# EIN Container kann mehrere Index-Gruppen UND mehrere Elasticsearch-Instanzen überwachen:
+# jedes Target hat sein eigenes `es_url` (+ optional `es_api_key` ODER `es_user`/`es_pass`).
+# Reads, Alert-Indizierung und Digest laufen je Target gegen DESSEN Elasticsearch.
 #
-# Feldnamen = die ENV-Keys in Kleinbuchstaben (z.B. ES_INDICES -> es_indices).
+# `defaults` werden auf JEDES Target angewandt; danach greifen die target-spezifischen Keys.
+# Jedes Target erbt zunächst die ENV-Defaults. Globale Loop-/Server-Settings (Intervall,
+# Heartbeat, HTTP-Port, State-Datei, Digest) übernimmt der Container vom ERSTEN Target —
+# am besten in `defaults` setzen. Feldnamen = ENV-Keys in Kleinbuchstaben (ES_INDICES -> es_indices).
 
 defaults:
   window_hours: 6
   interval_seconds: 21600
   cooldown_hours: 12
-  # gemeinsamer SMTP-/State-/HTTP-Teil:
-  smtp_host: smtp.example.com
-  smtp_from: log-watcher@oberschmid.homes
-  smtp_to: [p.oberschmid@cp-solutions.at]
+  # gemeinsamer Kanal-/State-/HTTP-Teil:
+  # smtp_host: smtp.example.com
+  # smtp_from: log-watcher@oberschmid.homes
+  # smtp_to: [p.oberschmid@cp-solutions.at]
+  discord_webhook_url: https://discord.com/api/webhooks/XXXX/YYYY
   state_file: /data/state.json
   heartbeat_file: /data/heartbeat
   http_port: 8080
@@ -22,16 +25,25 @@ defaults:
   digest_hour: 7
 
 targets:
+  # ── ES-Instanz A (rookhub) ──────────────────────────────────────────────────
   - name: rookhub
+    es_url: http://host.docker.internal:9200
     es_indices: [rookhub-logs-*, crawler-logs-*]
-    alert_index_prefix: log-watcher-alerts-rookhub
+    alert_index_prefix: log-watcher-alerts
 
+  # ── ES-Instanz B (anderer Host/Port, eigener API-Key) ───────────────────────
   - name: lernkompass
+    es_url: http://10.24.12.20:9200
+    es_api_key: BASE64_API_KEY_HIER
     es_indices: [lernkompass-logs-*]
     min_errors: 10
-    alert_index_prefix: log-watcher-alerts-lernkompass
+    alert_index_prefix: log-watcher-alerts
 
+  # ── ES-Instanz C (Basic-Auth, saisonale Baseline) ──────────────────────────
   - name: piratechess
+    es_url: https://es.piratechess.intern:9200
+    es_user: watcher
+    es_pass: CHANGEME
     es_indices: [piratechess-logs-*]
-    baseline_mode: last_week     # saisonaler Vergleich
-    alert_index_prefix: log-watcher-alerts-piratechess
+    baseline_mode: last_week
+    alert_index_prefix: log-watcher-alerts

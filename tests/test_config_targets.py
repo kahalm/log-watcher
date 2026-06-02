@@ -34,6 +34,31 @@ def test_multi_target_yaml(tmp_path, monkeypatch):
     assert targets[1].es_indices == ["lernkompass-logs-*"]
 
 
+def test_per_target_different_es_instances(tmp_path, monkeypatch):
+    p = tmp_path / "cfg.yaml"
+    p.write_text(textwrap.dedent("""
+        targets:
+          - name: a
+            es_url: http://es-a:9200
+            es_indices: [a-*]
+          - name: b
+            es_url: http://es-b:9200
+            es_api_key: KEY-B
+            es_indices: [b-*]
+          - name: c
+            es_url: https://es-c:9200
+            es_user: u
+            es_pass: p
+            es_indices: [c-*]
+    """))
+    monkeypatch.setenv("CONFIG_FILE", str(p))
+    t = load_targets()
+    assert [c.es_url for c in t] == ["http://es-a:9200", "http://es-b:9200", "https://es-c:9200"]
+    assert t[0].es_api_key is None
+    assert t[1].es_api_key == "KEY-B"
+    assert t[2].es_user == "u" and t[2].es_pass == "p"
+
+
 def test_unknown_key_ignored(tmp_path, monkeypatch):
     p = tmp_path / "c.yaml"
     p.write_text("targets:\n  - name: x\n    bogus_key: 1\n")

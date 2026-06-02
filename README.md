@@ -142,8 +142,10 @@ für lokal die `build:`-Zeile einkommentieren). **Tag-gated wie die übrigen Rep
 - **Sample-Logs (14):** einige *redigierte* Beispielzeilen gehen an den LLM für die Ursachenanalyse.
 - **PII-Scrubbing (19):** `SCRUB_PII` entfernt E-Mails/IPs/Tokens vor LLM/Mail/ES.
 - **HTTP (15/16):** `HTTP_PORT>0` → `/healthz`, `/status` (JSON), `/metrics` (Prometheus).
-- **Multi-Target (17):** `CONFIG_FILE=…yaml` überwacht mehrere Index-Gruppen mit eigenen Schwellen
-  (siehe `config.example.yaml`); State/Alerts/Cooldown sind pro Target getrennt.
+- **Multi-Target (17):** `CONFIG_FILE=…yaml` überwacht mehrere Index-Gruppen **und mehrere
+  Elasticsearch-Instanzen** aus EINEM Container — jedes Target hat eigenes `es_url` (+ `es_api_key`
+  ODER `es_user`/`es_pass`); Reads/Alert-Index/Digest laufen je Target gegen dessen ES. State/
+  Alerts/Cooldown sind pro Target getrennt (siehe `config.example.yaml`).
 - **Replay (18):** `REPLAY_FROM`/`REPLAY_TO` testet die Regeln über einen vergangenen Zeitraum (nur Log-Ausgabe).
 - **Digest (4):** `DIGEST_ENABLED=true` schickt eine periodische Zusammenfassung (`DIGEST_HOUR_UTC`, `DIGEST_PERIOD_DAYS`).
 
