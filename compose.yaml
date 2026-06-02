@@ -1,26 +1,31 @@
+# Deployment: nutzt das von der CI gebaute GHCR-Image (Watchtower zieht :latest nach einem Tag).
+# Lokal bauen: `docker build -t ghcr.io/kahalm/log-watcher:latest .` ODER die build-Zeile einkommentieren.
 services:
   log-watcher:
-    build: .
     image: ghcr.io/kahalm/log-watcher:latest
+    # build: .                # für lokalen Build einkommentieren (statt GHCR zu ziehen)
     container_name: log-watcher
     restart: unless-stopped
     env_file: .env
-    stop_grace_period: 20s        # SIGTERM -> sauberes Herunterfahren (Loop bricht ab)
+    stop_grace_period: 20s    # SIGTERM -> sauberes Herunterfahren (Loop bricht ab)
     volumes:
-      - ./data:/data              # State (Dedupe/Cooldown) + Heartbeat persistent
+      - ./data:/data          # State (Dedupe/Cooldown/First-seen) + Heartbeat persistent
+    # HTTP (/healthz /status /metrics) optional auf den Host veröffentlichen (HTTP_PORT in .env):
+    # ports:
+    #   - "8080:8080"
     healthcheck:
       test: ["CMD", "python", "/app/healthcheck.py"]
       interval: 60s
       timeout: 5s
       start_period: 30s
       retries: 3
+    # labels:
+    #   - com.centurylinklabs.watchtower.enable=true   # nur falls deine Watchtower label-gesteuert ist
     networks:
       - monitored
 
-# Externes Netz, in dem Elasticsearch erreichbar ist.
-# Für den rookhub-Prod-Stack ist das "rookhub_rookhub" (ermittelt via: docker network ls | grep rookhub).
-# Alternativ ES_URL in .env auf die gepublishte Host-Adresse setzen (http://<host>:9200) und
-# diesen networks-Block entfernen.
+# Externes Netz, in dem Elasticsearch erreichbar ist (rookhub-Prod: "rookhub_rookhub").
+# Alternativ ES_URL in .env auf http://<host>:9200 setzen und diesen Block entfernen.
 networks:
   monitored:
     external: true

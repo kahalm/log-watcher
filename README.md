@@ -113,20 +113,22 @@ ES_URL=http://localhost:9200 SELFTEST=true PYTHONPATH=src python -m watcher.main
 - Tests laufen via GitHub Actions (`.github/workflows/test.yml`).
 - Image: `ghcr.io/kahalm/log-watcher`.
 
-## Deploy (Docker)
-1. `cp .env.example .env` und ausfüllen (SMTP, ggf. ANTHROPIC_API_KEY).
-2. Netz festlegen, in dem ES erreichbar ist:
+## Deploy (Docker, Homelab — turnkey)
+Eine fertige `.env` liegt bei (rookhub-Defaults: ES intern, Netz `rookhub_rookhub`, `HTTP_PORT=8080`,
+**`DRY_RUN=true`** für sicheren Start). Nur einen **Alert-Kanal** eintragen:
+```ini
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/…   # und/oder SMTP_*
+# ANTHROPIC_API_KEY=sk-ant-…   # optional; ohne -> rein regelbasiert
+```
+1. **Beobachten (kein Versand):** so wie geliefert starten und Logs prüfen:
    ```bash
-   docker network ls | grep rookhub      # Name ermitteln
-   echo "MONITORED_NETWORK=<name>" >> .env
+   docker compose up -d && docker compose logs -f
    ```
-   *Alternativ:* `ES_URL=http://<host>:9200` (gepublishter Port) setzen und den `networks`-Block
-   in `compose.yaml` entfernen.
-3. Start:
-   ```bash
-   docker compose up -d --build
-   docker compose logs -f
-   ```
+2. **Scharf schalten:** in `.env` `DRY_RUN=false` → `docker compose up -d`.
+
+`compose.yaml` zieht das CI-gebaute Image `ghcr.io/kahalm/log-watcher:latest` (kein lokaler Build nötig;
+für lokal die `build:`-Zeile einkommentieren). **Tag-gated wie die übrigen Repos:** Tag `vX.Y.Z` → CI baut
+`:latest` → Watchtower deployt. Health/Metrics: `:8080/healthz`, `/status`, `/metrics`.
 
 ## Weitere Features
 - **Fingerprinting (8):** variable Teile (Zahlen/GUIDs/Hex/Quotes) werden normalisiert, sodass
