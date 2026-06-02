@@ -11,6 +11,9 @@
 
 defaults:
   window_hours: 6
+  # Eigenes (größeres) Fenster nur für die Per-Index-Stille-Prüfung; vermeidet Fehlalarme
+  # bei bursty Low-Volume-Indizes (z.B. crawler-logs). 0 = aus.
+  index_silent_window_hours: 24
   interval_seconds: 21600
   cooldown_hours: 12
   # gemeinsamer Kanal-/State-/HTTP-Teil:

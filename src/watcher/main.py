@@ -77,6 +77,18 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     now_ts = now.timestamp()
     known = state.known_fingerprints(st, cfg.name)
     signals = rules.evaluate(current, baseline, cfg, known_fingerprints=known)
+
+    # Per-Index-Stille über ein eigenes (größeres) Fenster prüfen — vermeidet Fehlalarme
+    # bei bursty, aktivitätsgetriebenen Indizes (z.B. crawler-logs hat normale Leerlaufphasen).
+    if cfg.ingestion_drop_check and cfg.index_silent_window_hours > 0:
+        isw = timedelta(hours=cfg.index_silent_window_hours)
+        try:
+            cur_idx = es.per_index_counts(_iso(now - isw), _iso(now))
+            base_idx = es.per_index_counts(_iso(now - 2 * isw), _iso(now - isw))
+            signals += rules.evaluate_index_silence(cur_idx, base_idx, cfg, cfg.index_silent_window_hours)
+        except ESError as e:
+            log.warning("Index-Stille-Prüfung übersprungen: %s", e)
+
     METRICS.add_signals([s.kind for s in signals])
 
     # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9).
@@ -220,6 +232,14 @@ def replay(cfg: Config, es: ESClient, start_dt: datetime, end_dt: datetime) -> i
             current["error_messages"] = scrub.scrub_messages(current.get("error_messages", {}))
             baseline["error_messages"] = scrub.scrub_messages(baseline.get("error_messages", {}))
         signals = rules.evaluate(current, baseline, cfg)
+        if cfg.ingestion_drop_check and cfg.index_silent_window_hours > 0:
+            isw = timedelta(hours=cfg.index_silent_window_hours)
+            try:
+                cur_idx = es.per_index_counts(_iso(cursor - isw), _iso(cursor))
+                base_idx = es.per_index_counts(_iso(cursor - 2 * isw), _iso(cursor - isw))
+                signals += rules.evaluate_index_silence(cur_idx, base_idx, cfg, cfg.index_silent_window_hours)
+            except ESError as e:
+                log.warning("REPLAY: Index-Stille-Prüfung übersprungen: %s", e)
         if signals:
             fired += 1
             log.info("REPLAY %s: %s", _iso(cursor), " | ".join(f"{s.kind}: {s.detail}" for s in signals))

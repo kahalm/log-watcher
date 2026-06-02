@@ -62,6 +62,10 @@ class Config:
 
     # --- Fenster / Intervall ---
     window_hours: float = field(default_factory=lambda: _float("WINDOW_HOURS", 6.0))
+    # Eigenes (größeres) Fenster nur für die Per-Index-Stille-Prüfung. Bursty/aktivitäts-
+    # getriebene Low-Volume-Indizes (z.B. crawler-logs) haben normale Leerlaufphasen — ein
+    # größeres Fenster verhindert Fehlalarme. 0 = Index-Stille-Prüfung aus.
+    index_silent_window_hours: float = field(default_factory=lambda: _float("INDEX_SILENT_WINDOW_HOURS", 24.0))
     interval_seconds: int = field(default_factory=lambda: _int("INTERVAL_SECONDS", 6 * 3600))
     run_once: bool = field(default_factory=lambda: _bool("RUN_ONCE", False))
 

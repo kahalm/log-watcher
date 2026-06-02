@@ -66,14 +66,27 @@ def evaluate(current: dict, baseline: dict, cfg, known_fingerprints=None) -> "li
         signals.append(Signal("ingestion_stopped", "high",
                               f"Keine Logs im aktuellen Fenster (Vorfenster: {baseline['total']}). Ingestion gestoppt?"))
 
-    # 4b) Per-Index-Stille (Feature 10): ein Index verstummt, während andere weiterloggen.
-    if cfg.ingestion_drop_check and current["total"] > 0:
-        cur_idx = current.get("per_index", {})
-        for idx, base_cnt in baseline.get("per_index", {}).items():
-            if base_cnt >= cfg.min_errors and cur_idx.get(idx, 0) == 0:
-                signals.append(Signal("index_silent", "high",
-                                      f"Index '{idx}': 0 Logs im Fenster (Vorfenster: {base_cnt})."))
+    return signals
 
+
+def evaluate_index_silence(cur_index: dict, base_index: dict, cfg, window_hours: float | None = None) -> "list[Signal]":
+    """Per-Index-Stille (Feature 10): ein Index verstummt, während andere weiterloggen.
+
+    Läuft über ein eigenes (i.d.R. größeres) Fenster als die Spike-/Fehler-Regeln, damit
+    bursty, aktivitätsgetriebene Low-Volume-Indizes (z.B. crawler-logs) bei normalen
+    Leerlaufphasen keinen Fehlalarm auslösen. `cur_index`/`base_index` = {index: count}.
+    """
+    signals: list[Signal] = []
+    if not cfg.ingestion_drop_check:
+        return signals
+    # Ganze Pipeline still? -> das ist „ingestion_stopped", nicht „index_silent".
+    if sum(cur_index.values()) <= 0:
+        return signals
+    wtxt = f"{window_hours:g}h-" if window_hours else ""
+    for idx, base_cnt in base_index.items():
+        if base_cnt >= cfg.min_errors and cur_index.get(idx, 0) == 0:
+            signals.append(Signal("index_silent", "high",
+                                  f"Index '{idx}': 0 Logs im {wtxt}Fenster (Vorfenster: {base_cnt})."))
     return signals
 
 

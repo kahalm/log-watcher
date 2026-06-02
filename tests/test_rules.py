@@ -87,13 +87,36 @@ def test_ingestion_stopped():
 
 def test_index_silent_partial_outage():
     c = _cfg()
+    cur_index = {"a-2026.06": 100, "b-2026.06": 0}   # b verstummt, a lebt weiter
+    base_index = {"a-2026.06": 50, "b-2026.06": 50}
+    sigs = rules.evaluate_index_silence(cur_index, base_index, c, 24)
+    kinds = [s.kind for s in sigs]
+    assert "index_silent" in kinds
+    assert "24h-Fenster" in sigs[0].detail   # Fensterangabe in der Meldung
+
+
+def test_index_silent_not_in_main_evaluate():
+    # Per-Index-Stille läuft jetzt über ein eigenes Fenster, nicht über evaluate().
+    c = _cfg()
     current = {"total": 100, "levels": {"Information": 100}, "error_messages": {},
                "per_index": {"a-2026.06": 100, "b-2026.06": 0}}
     baseline = {"total": 100, "levels": {"Information": 100}, "error_messages": {},
                 "per_index": {"a-2026.06": 50, "b-2026.06": 50}}
-    kinds = [s.kind for s in rules.evaluate(current, baseline, c)]
-    assert "index_silent" in kinds        # b verstummt, a lebt weiter
-    assert "ingestion_stopped" not in kinds
+    assert "index_silent" not in [s.kind for s in rules.evaluate(current, baseline, c)]
+
+
+def test_index_silent_skips_when_whole_pipeline_quiet():
+    # Alle Indizes still -> das ist „ingestion_stopped", nicht „index_silent".
+    c = _cfg()
+    sigs = rules.evaluate_index_silence({"a": 0, "b": 0}, {"a": 50, "b": 50}, c, 24)
+    assert sigs == []
+
+
+def test_index_silent_ignores_low_baseline():
+    # Index unter min_errors-Baseline -> kein Fehlalarm bei normalem Leerlauf.
+    c = _cfg()  # min_errors=5
+    sigs = rules.evaluate_index_silence({"a": 100, "b": 0}, {"a": 50, "b": 3}, c, 24)
+    assert sigs == []
 
 
 def test_new_errors_respects_known_fingerprints():

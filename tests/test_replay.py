@@ -12,6 +12,9 @@ class _FakeES:
         self.calls += 1
         return {"total": 100, "levels": {"Error": 10}, "error_messages": {"boom": 10}, "per_index": {}}
 
+    def per_index_counts(self, a, b):
+        return {}   # Index-Stille-Prüfung (eigenes Fenster) — hier neutral
+
 
 def test_replay_steps_full_windows():
     cfg = Config()  # window_hours=6, baseline previous -> 2 Aggregate je Fenster

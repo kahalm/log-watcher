@@ -128,6 +128,27 @@ class ESClient:
         except (requests.RequestException, ValueError):
             return 0
 
+    def per_index_counts(self, start_iso: str, end_iso: str) -> dict:
+        """Nur Doc-Counts je Index für ein Fenster (leichtgewichtig, für die Index-Stille-Prüfung).
+
+        {index_name: count}. Bei 4xx (z.B. Feld nicht aggregierbar) leeres Dict;
+        Verbindungs-/Serverfehler (status None / >=500) werden weitergereicht.
+        """
+        body = {
+            "size": 0, "track_total_hits": False,
+            "query": self._range(start_iso, end_iso),
+            "aggs": {"by_index": {"terms": {"field": "_index", "size": 50}}},
+        }
+        try:
+            resp = self._search(body)
+        except ESError as e:
+            if e.status is None or e.status >= 500:
+                raise
+            log.warning("per_index_counts reduziert (Feld nicht aggregierbar?): %s", e)
+            return {}
+        buckets = resp.get("aggregations", {}).get("by_index", {}).get("buckets", [])
+        return {b["key"]: b["doc_count"] for b in buckets}
+
     def ensure_alert_template(self, prefix: str) -> None:
         """Index-Template für die Alert-Indizes: replicas=0 (Single-Node bleibt green)."""
         name = f"{prefix}-template"
