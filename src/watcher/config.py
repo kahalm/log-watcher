@@ -66,6 +66,16 @@ class Config:
     # getriebene Low-Volume-Indizes (z.B. crawler-logs) haben normale Leerlaufphasen — ein
     # größeres Fenster verhindert Fehlalarme. 0 = Index-Stille-Prüfung aus.
     index_silent_window_hours: float = field(default_factory=lambda: _float("INDEX_SILENT_WINDOW_HOURS", 24.0))
+    # Heartbeat-Überwachung: erwartete Lebenszeichen pro Dienst als "name=index=phrase"-Tripel
+    # (komma-separiert). Kam in den letzten HEARTBEAT_MAX_STALENESS_MINUTES kein passender
+    # Heartbeat → Signal "heartbeat_missing" (Dienst vermutlich tot). 0 min = aus.
+    # phrase wird per match_phrase gegen das gerenderte Message-Feld (sample_field) geprüft.
+    heartbeat_checks: list = field(default_factory=lambda: _list(
+        "HEARTBEAT_CHECKS",
+        "rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,"
+        "rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,"
+        "schach-bot=rookhub-logs-*=ClientLog heartbeat_bot"))
+    heartbeat_max_staleness_minutes: float = field(default_factory=lambda: _float("HEARTBEAT_MAX_STALENESS_MINUTES", 5.0))
     interval_seconds: int = field(default_factory=lambda: _int("INTERVAL_SECONDS", 6 * 3600))
     run_once: bool = field(default_factory=lambda: _bool("RUN_ONCE", False))
 

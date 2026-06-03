@@ -30,6 +30,25 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+def _heartbeat_counts(cfg: Config, es: ESClient, now: datetime) -> dict:
+    """Pro erwartetem Dienst (cfg.heartbeat_checks: "name=index=phrase") zählen, wie viele
+    passende Heartbeats in den letzten heartbeat_max_staleness_minutes ankamen. {name: count}."""
+    counts: dict = {}
+    window_min = cfg.heartbeat_max_staleness_minutes
+    if window_min <= 0 or not cfg.heartbeat_checks:
+        return counts
+    rng = {"range": {cfg.timestamp_field: {"gte": _iso(now - timedelta(minutes=window_min)), "lt": _iso(now)}}}
+    for spec in cfg.heartbeat_checks:
+        parts = [p.strip() for p in spec.split("=", 2)]
+        if len(parts) != 3 or not all(parts):
+            log.warning("Ungültige HEARTBEAT_CHECKS-Angabe übersprungen: %r", spec)
+            continue
+        name, index, phrase = parts
+        query = {"bool": {"must": [{"match_phrase": {cfg.sample_field: phrase}}, rng]}}
+        counts[name] = es.count(index, query)
+    return counts
+
+
 def _build_time_str() -> str:
     raw = os.environ.get("LOGWATCHER_BUILD_TIME", "")
     if not raw or raw == "unknown":
@@ -88,6 +107,15 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             signals += rules.evaluate_index_silence(cur_idx, base_idx, cfg, cfg.index_silent_window_hours)
         except ESError as e:
             log.warning("Index-Stille-Prüfung übersprungen: %s", e)
+
+    # Heartbeat-Überwachung: fehlt das Lebenszeichen eines Dienstes → vermutlich tot. Greift
+    # pro Dienst (genauer als die Index-Stille) und macht „Stille" verlässlich auswertbar,
+    # da gesunde Dienste alle 60 s einen Heartbeat schreiben.
+    if cfg.heartbeat_max_staleness_minutes > 0 and cfg.heartbeat_checks:
+        try:
+            signals += rules.evaluate_heartbeats(_heartbeat_counts(cfg, es, now), cfg)
+        except ESError as e:
+            log.warning("Heartbeat-Prüfung übersprungen: %s", e)
 
     METRICS.add_signals([s.kind for s in signals])
 

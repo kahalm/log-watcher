@@ -12,7 +12,7 @@ from .fingerprint import fingerprint
 
 @dataclass
 class Signal:
-    kind: str            # error_spike | warn_spike | fatal | new_errors | ingestion_stopped | index_silent
+    kind: str            # error_spike | warn_spike | fatal | new_errors | ingestion_stopped | index_silent | heartbeat_missing
     severity_hint: str   # low | medium | high
     detail: str
 
@@ -87,6 +87,23 @@ def evaluate_index_silence(cur_index: dict, base_index: dict, cfg, window_hours:
         if base_cnt >= cfg.min_errors and cur_index.get(idx, 0) == 0:
             signals.append(Signal("index_silent", "high",
                                   f"Index '{idx}': 0 Logs im {wtxt}Fenster (Vorfenster: {base_cnt})."))
+    return signals
+
+
+def evaluate_heartbeats(hb_counts: dict, cfg) -> "list[Signal]":
+    """Heartbeat-Überwachung: pro erwartetem Dienst prüfen, ob in den letzten N Minuten ein
+    Lebenszeichen ankam. `hb_counts` = {service_name: count}. Count 0 → Dienst vermutlich tot.
+
+    Anders als die Index-Stille greift das PRO DIENST (z.B. API tot, während der Bot weiter in
+    denselben Index heartbeatet → Index nicht still, dieser Check aber schlägt an).
+    """
+    signals: list[Signal] = []
+    window = cfg.heartbeat_max_staleness_minutes
+    for name, count in hb_counts.items():
+        if count == 0:
+            signals.append(Signal(
+                "heartbeat_missing", "high",
+                f"Kein Heartbeat von '{name}' in den letzten {window:g} min — Dienst vermutlich tot/hängend."))
     return signals
 
 

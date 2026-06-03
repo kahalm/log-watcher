@@ -119,6 +119,28 @@ def test_index_silent_ignores_low_baseline():
     assert sigs == []
 
 
+def test_heartbeat_missing_when_count_zero():
+    c = _cfg()
+    sigs = rules.evaluate_heartbeats({"rookhub-api": 0, "rookhub-crawler": 4}, c)
+    kinds = [s.kind for s in sigs]
+    assert kinds == ["heartbeat_missing"]            # nur der tote Dienst feuert
+    assert sigs[0].severity_hint == "high"
+    assert "rookhub-api" in sigs[0].detail
+
+
+def test_heartbeat_ok_when_all_present():
+    c = _cfg()
+    sigs = rules.evaluate_heartbeats({"rookhub-api": 1, "rookhub-crawler": 2, "schach-bot": 1}, c)
+    assert sigs == []
+
+
+def test_heartbeat_multiple_missing():
+    c = _cfg()
+    sigs = rules.evaluate_heartbeats({"rookhub-api": 0, "schach-bot": 0}, c)
+    assert {s.kind for s in sigs} == {"heartbeat_missing"}
+    assert len(sigs) == 2
+
+
 def test_new_errors_respects_known_fingerprints():
     from watcher.fingerprint import fingerprint
     c = _cfg()

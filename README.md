@@ -47,6 +47,7 @@ False-Positives niedrig.
 | `new_errors` | medium | per Fingerprint gruppierte Fehler, die *erstmalig* (nicht nur seit Vorfenster) auftreten |
 | `ingestion_stopped` | high | gesamt 0 Logs → Pipeline evtl. tot |
 | `index_silent` | high | ein Index verstummt, während andere weiterloggen (Teil-Ausfall) |
+| `heartbeat_missing` | high | ein Dienst hat in den letzten N min KEIN Lebenszeichen geschrieben (vermutlich tot/hängend) — pro Dienst, genauer als Index-Stille |
 
 Die Alarm-Mail wird als **HTML** (mit farbigen Severity-Badges + Level-Tabelle Aktuell-vs-Baseline) **plus Plaintext-Fallback** verschickt.
 
@@ -76,6 +77,8 @@ Siehe `.env.example`. Wichtigste Werte:
 | `ES_INDICES` | `rookhub-logs-*,crawler-logs-*` | überwachte Index-Pattern |
 | `WINDOW_HOURS` / `INTERVAL_SECONDS` | `6` / `21600` | Fenstergröße / Prüfintervall |
 | `INDEX_SILENT_WINDOW_HOURS` | `24` | eigenes (größeres) Fenster nur für die Per-Index-Stille-Prüfung; vermeidet Fehlalarme bei bursty Low-Volume-Indizes (z.B. crawler-logs). `0` = aus |
+| `HEARTBEAT_CHECKS` | `rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,schach-bot=rookhub-logs-*=ClientLog heartbeat_bot` | erwartete Lebenszeichen als `name=index=phrase`-Tripel (komma-getrennt); `phrase` wird per `match_phrase` gegen das gerenderte Message-Feld geprüft |
+| `HEARTBEAT_MAX_STALENESS_MINUTES` | `5` | kein passender Heartbeat in diesem Fenster → `heartbeat_missing`. `0` = Heartbeat-Prüfung aus |
 | `MIN_ERRORS` / `ERROR_SPIKE_FACTOR` | `5` / `3.0` | Spike-Schwellen |
 | `ANTHROPIC_API_KEY` | – | optional; ohne → rein regelbasiert |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | günstiges Monitoring-Modell |
