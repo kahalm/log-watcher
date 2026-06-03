@@ -167,7 +167,9 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         return
 
     severity = assessment.get("severity", rules.overall_severity(signals))
-    subject = f"[log-watcher][{severity.upper()}] Auffälligkeit in {', '.join(cfg.es_indices)}"
+    # Target-Name in den Betreff/Titel: bei mehreren ES-Instanzen mit identischen Index-Namen
+    # (z.B. rookhub-prod vs. rookhub-dev, beide rookhub-logs-*) sonst nicht auseinanderzuhalten.
+    subject = f"[log-watcher][{cfg.name}][{severity.upper()}] Auffälligkeit in {', '.join(cfg.es_indices)}"
     text_body = notifier.build_email_body(assessment, signals, current, baseline, cfg)
     html_body = notifier.build_email_html(assessment, signals, current, baseline, cfg)
 

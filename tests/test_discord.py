@@ -27,6 +27,23 @@ def test_build_alert_payload():
     assert "error_spike" in sig_field["value"] and "warn_spike" in sig_field["value"]
 
 
+def test_alert_payload_footer_identifies_es_instance():
+    """Footer trägt Target-Name + ES-URL → mehrere ES-Instanzen mit gleichen Index-Namen
+    (prod vs. dev) sind im Discord-Post auseinanderzuhalten."""
+    import os
+    os.environ["TARGET_NAME"] = "rookhub-prod"
+    os.environ["ES_URL"] = "http://10.24.13.6:9200"
+    try:
+        cfg = Config()
+    finally:
+        del os.environ["TARGET_NAME"], os.environ["ES_URL"]
+    a = {"severity": "medium", "summary": "x", "llm_used": False}
+    p = discord_notify.build_alert_payload("[log-watcher][rookhub-prod][MEDIUM] subj",
+                                           a, [_S("warn_spike", "31")], {"total": 1, "levels": {}}, {"total": 0}, cfg)
+    footer = p["embeds"][0]["footer"]["text"]
+    assert "rookhub-prod" in footer and "10.24.13.6:9200" in footer
+
+
 def test_post_calls_webhook(monkeypatch):
     captured = {}
 
