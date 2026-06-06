@@ -131,6 +131,10 @@ class Config:
     digest_hour: int = field(default_factory=lambda: _int("DIGEST_HOUR_UTC", 7))
     digest_period_days: int = field(default_factory=lambda: _int("DIGEST_PERIOD_DAYS", 1))
 
+    # --- All-is-well (tägliche Wächter-Meldung) ---
+    alliswell_enabled: bool = field(default_factory=lambda: _bool("ALLISWELL_ENABLED", True))
+    alliswell_hour: int = field(default_factory=lambda: _int("ALLISWELL_HOUR_UTC", 8))
+
     # --- Sonstiges ---
     dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))
     notify_on_start: bool = field(default_factory=lambda: _bool("NOTIFY_ON_START", False))

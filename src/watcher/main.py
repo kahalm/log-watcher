@@ -313,6 +313,49 @@ def _maybe_digest(glob: Config, clients, st: dict, now: datetime) -> None:
     state.save_state(glob.state_file, st)
 
 
+_ALLISWELL_QUOTE = (
+    '"As they saw it, their purpose was to walk down the street chanting '
+    "'Two o'clock and all's well', and if all wasn't well, they found another street.\""
+    "\n— *Night Watch*, Terry Pratchett"
+)
+
+
+def _any_recent_alert(st: dict, targets, since_ts: float) -> bool:
+    """True wenn irgendeines der Targets in den letzten Stunden einen Alert gesendet hat."""
+    for cfg in targets:
+        alerts = st.get("targets", {}).get(cfg.name, {}).get("alerts", {})
+        if any(ts >= since_ts for ts in alerts.values()):
+            return True
+    return False
+
+
+def _maybe_alliswell(glob: Config, targets, st: dict, now: datetime) -> None:
+    if not glob.alliswell_enabled or not glob.discord_webhook_url:
+        return
+    last = st.get("last_alliswell")
+    if last is not None:
+        try:
+            if now.date() == date.fromisoformat(last):
+                return
+        except ValueError:
+            pass
+    if now.hour < glob.alliswell_hour:
+        return
+    if _any_recent_alert(st, targets, now.timestamp() - 86400):
+        return
+    msg = f"🕗 Zwei Uhr und alles in Ordnung!\n> {_ALLISWELL_QUOTE}\n\n✅ Keine Auffälligkeiten in den letzten 24 h."
+    if glob.dry_run:
+        log.info("DRY_RUN: All-is-well: %s", msg)
+    else:
+        try:
+            discord_notify.post_text(glob.discord_webhook_url, msg)
+            log.info("All-is-well-Meldung an Discord gesendet.")
+        except Exception as e:  # noqa: BLE001
+            log.error("All-is-well-Discord fehlgeschlagen: %s", e)
+    st["last_alliswell"] = now.date().isoformat()
+    state.save_state(glob.state_file, st)
+
+
 def _sleep_with_heartbeat(cfg: Config, seconds: float) -> None:
     """In Häppchen schlafen, dabei Heartbeat aktualisieren und auf Stop-Signal reagieren."""
     deadline = time.monotonic() + seconds
@@ -396,9 +439,11 @@ def main() -> int:
             except Exception:
                 log.exception("Unerwarteter Fehler im Zyklus [%s]", cfg.name)
         try:
-            _maybe_digest(glob, clients, state.load_state(glob.state_file), cycle_now)
+            shared_st = state.load_state(glob.state_file)
+            _maybe_digest(glob, clients, shared_st, cycle_now)
+            _maybe_alliswell(glob, [cfg for cfg, _ in clients], shared_st, cycle_now)
         except Exception:
-            log.exception("Digest fehlgeschlagen")
+            log.exception("Digest/All-is-well fehlgeschlagen")
         METRICS.mark_cycle(time.time())
         health.write_heartbeat(glob.heartbeat_file)
         if glob.run_once:
