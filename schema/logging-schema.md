@@ -21,23 +21,33 @@ wer es (noch) nicht tut, wird beim Ingest automatisch normalisiert (siehe unten)
 | `log.logger` | keyword | ⭕ | Logger/SourceContext |
 | `host.name` | keyword | ⭕ | Host/Maschine |
 | `trace.id`, `span.id` | keyword | ⭕ | Tracing-Korrelation |
-| `tags` | keyword[] | ⭕ | Frei belegbare Marker (ECS). Konvention: `heartbeat` (Keepalive-Logs), `healthcheck` (Health-Endpunkte) |
+| `tags` | keyword[] | ⭕ | Frei belegbare Marker (ECS) — siehe Tag-Katalog unten |
 | `labels.*` | keyword | ⭕ | App-spezifische Zusatzfelder (frei) |
 
-## Marker: Heartbeat-Logs (`tags: heartbeat`)
+## Tag-Katalog
 
-Periodische Keepalive-/Heartbeat-Logs tragen den Tag **`heartbeat`** im `tags`-Array,
-damit sie sich strukturiert ausblenden lassen (z.B. Discover-Filter `not tags: heartbeat`,
-gespeicherte Suche „Alle Logs (ohne Heartbeat)").
+Die Ingest-Pipeline setzt diese `tags` **automatisch** anhand struktureller Signale —
+Dienste müssen nichts tun, auch künftige sind abgedeckt. Ein Log kann mehrere Tags tragen
+(z.B. ein 401-Request → `request` + `auth`).
 
-Die Ingest-Pipeline setzt die Tags **automatisch**:
-- `heartbeat` — Message enthält `Heartbeat:` oder `heartbeat_bot`.
-- `healthcheck` — `url.path` endet auf `/health`, `/healthz`, `/livez` oder `/readyz`
-  (auch für historische Logs, da `fields.RequestPath` → `url.path` normalisiert wird).
+| Tag | gesetzt wenn | Zweck |
+|-----|--------------|-------|
+| `heartbeat` | Message enthält `Heartbeat:` oder `heartbeat_bot` | Keepalive-Rauschen ausblenden |
+| `healthcheck` | `url.path` endet auf `/health` `/healthz` `/livez` `/readyz` | Health-Probe-Rauschen ausblenden |
+| `request` | `http.response.status_code` vorhanden | HTTP-Zugriffslogs von App-Logs trennen |
+| `auth` | Status 401/403 **oder** Message enthält `Anmeldung`/`Unautorisiert`/`Unauthorized` | Anmelde-/Auth-Events (Security) |
+| `startup` | `log.logger` = `Microsoft.Hosting.Lifetime` oder `…EntityFrameworkCore.Migrations` | Lifecycle/Boot |
+| `db` | `log.logger` beginnt mit `Microsoft.EntityFrameworkCore` (ohne Migrations) | DB-/EF-Logs |
 
-Dienste müssen also nichts tun. Neue Dienste mit anders geformten Heartbeats/Healthchecks
-setzen den Tag selbst (`tags: ["heartbeat"]`) oder nehmen ihr Muster in die Pipeline-Bedingung auf.
-Discover-Default „Alle Logs (ohne Heartbeat)" filtert `not tags: (heartbeat or healthcheck)`.
+Damit auch **historische** rohe Logs greifen, normalisiert die Pipeline die Request-Synonyme
+`fields.RequestPath → url.path`, `fields.RequestMethod → http.request.method`,
+`fields.StatusCode → http.response.status_code`.
+
+Neue Dienste mit abweichenden Mustern setzen den Tag selbst (`tags: ["…"]`) oder nehmen ihr
+Muster in die Pipeline-Bedingung auf.
+
+**Discover-Default** „Alle Logs (ohne Heartbeat)" filtert `not tags: (heartbeat or healthcheck)`.
+Die übrigen Tags sind Filter-Dimensionen (z.B. nur `tags: auth` für Security-Sicht).
 
 > **Level-Werte bleiben großgeschrieben** (`Error`, `Fatal`, …), passend zur
 > log-watcher-Konfig (`ES_ERROR_LEVELS=Error,Fatal`). Nicht auf ECS-Kleinschreibung umstellen.

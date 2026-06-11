@@ -18,6 +18,8 @@
     { "rename": { "field": "fields.SourceContext", "target_field": "log.logger", "ignore_missing": true } },
     { "rename": { "field": "fields.MachineName",   "target_field": "host.name",  "ignore_missing": true } },
     { "rename": { "field": "fields.RequestPath",   "target_field": "url.path",   "ignore_missing": true } },
+    { "rename": { "field": "fields.RequestMethod", "target_field": "http.request.method",       "ignore_missing": true } },
+    { "rename": { "field": "fields.StatusCode",    "target_field": "http.response.status_code", "ignore_missing": true } },
 
     { "set": { "field": "service.name",        "copy_from": "labels.Application", "if": "ctx.service?.name == null && ctx.labels?.Application != null" } },
     { "set": { "field": "service.name",        "copy_from": "fields.Application", "if": "ctx.service?.name == null && ctx.fields?.Application != null" } },
@@ -30,6 +32,14 @@
                   "if": "ctx.message != null && (ctx.message.contains('Heartbeat:') || ctx.message.contains('heartbeat_bot'))" } },
     { "append": { "field": "tags", "value": ["healthcheck"], "allow_duplicates": false,
                   "if": "ctx.url?.path != null && (ctx.url.path.endsWith('/health') || ctx.url.path.endsWith('/healthz') || ctx.url.path.endsWith('/livez') || ctx.url.path.endsWith('/readyz'))" } },
+    { "append": { "field": "tags", "value": ["request"], "allow_duplicates": false,
+                  "if": "ctx.http?.response?.status_code != null" } },
+    { "append": { "field": "tags", "value": ["auth"], "allow_duplicates": false,
+                  "if": "(ctx.http?.response?.status_code instanceof Number && (ctx.http.response.status_code == 401 || ctx.http.response.status_code == 403)) || (ctx.message != null && (ctx.message.contains('Anmeldung') || ctx.message.contains('Unautorisiert') || ctx.message.contains('Unauthorized')))" } },
+    { "append": { "field": "tags", "value": ["startup"], "allow_duplicates": false,
+                  "if": "ctx.log?.logger == 'Microsoft.Hosting.Lifetime' || (ctx.log?.logger != null && ctx.log.logger.contains('EntityFrameworkCore.Migrations'))" } },
+    { "append": { "field": "tags", "value": ["db"], "allow_duplicates": false,
+                  "if": "ctx.log?.logger != null && ctx.log.logger.startsWith('Microsoft.EntityFrameworkCore') && !ctx.log.logger.contains('Migrations')" } },
 
     { "set": { "field": "labels.schema_version", "value": "1", "override": true } }
   ],
