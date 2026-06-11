@@ -21,7 +21,7 @@ wer es (noch) nicht tut, wird beim Ingest automatisch normalisiert (siehe unten)
 | `log.logger` | keyword | ⭕ | Logger/SourceContext |
 | `host.name` | keyword | ⭕ | Host/Maschine |
 | `trace.id`, `span.id` | keyword | ⭕ | Tracing-Korrelation |
-| `tags` | keyword[] | ⭕ | Frei belegbare Marker (ECS). Konvention: `heartbeat` für Keepalive-/Heartbeat-Logs |
+| `tags` | keyword[] | ⭕ | Frei belegbare Marker (ECS). Konvention: `heartbeat` (Keepalive-Logs), `healthcheck` (Health-Endpunkte) |
 | `labels.*` | keyword | ⭕ | App-spezifische Zusatzfelder (frei) |
 
 ## Marker: Heartbeat-Logs (`tags: heartbeat`)
@@ -30,10 +30,14 @@ Periodische Keepalive-/Heartbeat-Logs tragen den Tag **`heartbeat`** im `tags`-A
 damit sie sich strukturiert ausblenden lassen (z.B. Discover-Filter `not tags: heartbeat`,
 gespeicherte Suche „Alle Logs (ohne Heartbeat)").
 
-Die Ingest-Pipeline setzt den Tag **automatisch** für bekannte Muster (Message enthält
-`Heartbeat:` oder `heartbeat_bot`) — Dienste müssen also nichts tun. Neue Dienste mit
-anders geformten Heartbeats sollen den Tag selbst setzen (`tags: ["heartbeat"]`) oder ihr
-Muster in die Pipeline-Bedingung aufnehmen.
+Die Ingest-Pipeline setzt die Tags **automatisch**:
+- `heartbeat` — Message enthält `Heartbeat:` oder `heartbeat_bot`.
+- `healthcheck` — `url.path` endet auf `/health`, `/healthz`, `/livez` oder `/readyz`
+  (auch für historische Logs, da `fields.RequestPath` → `url.path` normalisiert wird).
+
+Dienste müssen also nichts tun. Neue Dienste mit anders geformten Heartbeats/Healthchecks
+setzen den Tag selbst (`tags: ["heartbeat"]`) oder nehmen ihr Muster in die Pipeline-Bedingung auf.
+Discover-Default „Alle Logs (ohne Heartbeat)" filtert `not tags: (heartbeat or healthcheck)`.
 
 > **Level-Werte bleiben großgeschrieben** (`Error`, `Fatal`, …), passend zur
 > log-watcher-Konfig (`ES_ERROR_LEVELS=Error,Fatal`). Nicht auf ECS-Kleinschreibung umstellen.
