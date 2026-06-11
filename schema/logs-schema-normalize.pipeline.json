@@ -1,0 +1,33 @@
+{
+  "description": "Zentrale Log-Normalisierung auf das kanonische ECS-Schema (logging-schema.md, v1). Benennt synonyme Felder auf kanonische Felder um und setzt Pflichtfelder. Idempotent: bereits ECS-konforme Dokumente bleiben unveraendert. Wird als default_pipeline ueber das Component-Template 'logs-schema' an alle Log-Data-Streams gehaengt.",
+  "processors": [
+    { "rename": { "field": "level", "target_field": "log.level", "ignore_missing": true } },
+
+    { "set":    { "field": "user.name", "copy_from": "labels.Username", "if": "ctx.labels?.Username != null", "override": true } },
+    { "remove": { "field": "labels.Username", "ignore_missing": true } },
+    { "set":    { "field": "user.name", "copy_from": "labels.UserName", "if": "ctx.labels?.UserName != null", "override": true } },
+    { "remove": { "field": "labels.UserName", "ignore_missing": true } },
+    { "set":    { "field": "user.name", "copy_from": "fields.UserName", "if": "ctx.fields?.UserName != null", "override": true } },
+    { "remove": { "field": "fields.UserName", "ignore_missing": true } },
+
+    { "set":    { "field": "user.id", "copy_from": "labels.UserId", "if": "ctx.labels?.UserId != null", "override": true } },
+    { "remove": { "field": "labels.UserId", "ignore_missing": true } },
+    { "set":    { "field": "user.id", "copy_from": "fields.UserId", "if": "ctx.fields?.UserId != null", "override": true } },
+    { "remove": { "field": "fields.UserId", "ignore_missing": true } },
+
+    { "rename": { "field": "fields.SourceContext", "target_field": "log.logger", "ignore_missing": true } },
+    { "rename": { "field": "fields.MachineName",   "target_field": "host.name",  "ignore_missing": true } },
+
+    { "set": { "field": "service.name",        "copy_from": "labels.Application", "if": "ctx.service?.name == null && ctx.labels?.Application != null" } },
+    { "set": { "field": "service.name",        "copy_from": "fields.Application", "if": "ctx.service?.name == null && ctx.fields?.Application != null" } },
+    { "set": { "field": "service.environment", "copy_from": "labels.Environment", "if": "ctx.service?.environment == null && ctx.labels?.Environment != null" } },
+
+    { "set": { "field": "log.level",    "value": "Information", "override": false } },
+    { "set": { "field": "service.name", "value": "unknown",     "override": false } },
+
+    { "set": { "field": "labels.schema_version", "value": "1", "override": true } }
+  ],
+  "on_failure": [
+    { "set": { "field": "labels.schema_error", "value": "{{{ _ingest.on_failure_message }}}" } }
+  ]
+}

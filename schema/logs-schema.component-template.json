@@ -1,0 +1,23 @@
+{
+  "template": {
+    "settings": {
+      "index": {
+        "default_pipeline": "logs-schema-normalize"
+      }
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp":          { "type": "date" },
+        "message":             { "type": "match_only_text" },
+        "log":     { "properties": { "level": { "type": "keyword" }, "logger": { "type": "keyword" } } },
+        "service": { "properties": { "name": { "type": "keyword" }, "environment": { "type": "keyword" } } },
+        "user":    { "properties": { "name": { "type": "keyword" }, "id": { "type": "keyword" } } },
+        "host":    { "properties": { "name": { "type": "keyword" } } }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Kanonisches Logging-Schema (ECS-basiert), siehe logging-schema.md. Setzt die Normalisierungs-Pipeline als default_pipeline und mappt die kanonischen Pflicht-/Kernfelder. Per composed_of in jedes Log-Index-Template einhaengen.",
+    "schema_version": "1"
+  }
+}
