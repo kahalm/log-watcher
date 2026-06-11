@@ -21,7 +21,19 @@ wer es (noch) nicht tut, wird beim Ingest automatisch normalisiert (siehe unten)
 | `log.logger` | keyword | ⭕ | Logger/SourceContext |
 | `host.name` | keyword | ⭕ | Host/Maschine |
 | `trace.id`, `span.id` | keyword | ⭕ | Tracing-Korrelation |
+| `tags` | keyword[] | ⭕ | Frei belegbare Marker (ECS). Konvention: `heartbeat` für Keepalive-/Heartbeat-Logs |
 | `labels.*` | keyword | ⭕ | App-spezifische Zusatzfelder (frei) |
+
+## Marker: Heartbeat-Logs (`tags: heartbeat`)
+
+Periodische Keepalive-/Heartbeat-Logs tragen den Tag **`heartbeat`** im `tags`-Array,
+damit sie sich strukturiert ausblenden lassen (z.B. Discover-Filter `not tags: heartbeat`,
+gespeicherte Suche „Alle Logs (ohne Heartbeat)").
+
+Die Ingest-Pipeline setzt den Tag **automatisch** für bekannte Muster (Message enthält
+`Heartbeat:` oder `heartbeat_bot`) — Dienste müssen also nichts tun. Neue Dienste mit
+anders geformten Heartbeats sollen den Tag selbst setzen (`tags: ["heartbeat"]`) oder ihr
+Muster in die Pipeline-Bedingung aufnehmen.
 
 > **Level-Werte bleiben großgeschrieben** (`Error`, `Fatal`, …), passend zur
 > log-watcher-Konfig (`ES_ERROR_LEVELS=Error,Fatal`). Nicht auf ECS-Kleinschreibung umstellen.

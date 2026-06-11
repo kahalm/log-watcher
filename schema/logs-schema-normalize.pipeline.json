@@ -25,6 +25,9 @@
     { "set": { "field": "log.level",    "value": "Information", "override": false } },
     { "set": { "field": "service.name", "value": "unknown",     "override": false } },
 
+    { "append": { "field": "tags", "value": ["heartbeat"], "allow_duplicates": false,
+                  "if": "ctx.message != null && (ctx.message.contains('Heartbeat:') || ctx.message.contains('heartbeat_bot'))" } },
+
     { "set": { "field": "labels.schema_version", "value": "1", "override": true } }
   ],
   "on_failure": [
