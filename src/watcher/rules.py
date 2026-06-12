@@ -5,9 +5,28 @@ Das hält die Kosten niedrig und reduziert False Positives.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .fingerprint import fingerprint
+
+# Backing-Index eines Data-Streams: ".ds-<stream>-<yyyy.MM.dd>-<NNNNNN>".
+# Beim Rollover wird das vorherige Backing stumm, der Stream als Ganzes lebt aber
+# weiter -> wir kollabieren alle Backing-Indizes auf ihren Stream-Namen.
+_DS_BACKING = re.compile(r"^\.ds-(.+)-\d{4}\.\d{2}\.\d{2}-\d{6}$")
+
+
+def _collapse_datastreams(counts: dict) -> dict:
+    """Fasst Data-Stream-Backing-Indizes (.ds-…) unter ihrem Stream-Namen zusammen
+    und summiert die Counts. Klassische Indizes bleiben unverändert. So zählt für die
+    Stille-Prüfung der Data-Stream als EINE Einheit — ein Rollover (altes Backing → 0,
+    neues Backing aktiv) löst keinen Fehlalarm mehr aus."""
+    collapsed: dict = {}
+    for idx, cnt in counts.items():
+        m = _DS_BACKING.match(idx)
+        key = m.group(1) if m else idx
+        collapsed[key] = collapsed.get(key, 0) + cnt
+    return collapsed
 
 
 @dataclass
@@ -79,6 +98,10 @@ def evaluate_index_silence(cur_index: dict, base_index: dict, cfg, window_hours:
     signals: list[Signal] = []
     if not cfg.ingestion_drop_check:
         return signals
+    # Data-Stream-Backing-Indizes auf ihren Stream-Namen kollabieren, damit ein
+    # Rollover (altes .ds-…-000001 → 0, neues -000002 aktiv) keinen Fehlalarm auslöst.
+    cur_index = _collapse_datastreams(cur_index)
+    base_index = _collapse_datastreams(base_index)
     # Ganze Pipeline still? -> das ist „ingestion_stopped", nicht „index_silent".
     if sum(cur_index.values()) <= 0:
         return signals

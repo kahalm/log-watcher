@@ -167,3 +167,52 @@ def test_overall_severity():
         _cfg(),
     )
     assert rules.overall_severity(sigs) == "high"
+
+
+# ── Data-Stream-Rollover: Backing-Indizes dürfen keinen Stille-Fehlalarm auslösen ──
+
+def test_collapse_datastreams_sums_backing_indices():
+    counts = {
+        ".ds-rookhub-logs-generic-default-2026.06.11-000001": 20,
+        ".ds-rookhub-logs-generic-default-2026.06.11-000002": 7000,
+        "rookhub-logs-2026.06": 45000,   # klassischer Index bleibt eigenständig
+    }
+    out = rules._collapse_datastreams(counts)
+    assert out["rookhub-logs-generic-default"] == 7020
+    assert out["rookhub-logs-2026.06"] == 45000
+
+
+def test_index_silent_ignores_datastream_rollover():
+    # Altes Backing (-000001) verstummt nach Rollover, neues (-000002) lebt -> KEIN Alarm,
+    # weil beide zum selben Stream gehören.
+    c = _cfg()
+    cur = {".ds-rookhub-logs-generic-default-2026.06.11-000002": 7000,
+           ".ds-rookhub-logs-generic-default-2026.06.11-000001": 0}
+    base = {".ds-rookhub-logs-generic-default-2026.06.11-000002": 50,
+            ".ds-rookhub-logs-generic-default-2026.06.11-000001": 20}
+    sigs = rules.evaluate_index_silence(cur, base, c, 24)
+    assert [s for s in sigs if s.kind == "index_silent"] == []
+
+
+def test_index_silent_still_fires_for_whole_datastream_outage():
+    # Ein ganzer Stream verstummt, während ein anderer weiterlebt -> Alarm bleibt.
+    c = _cfg()
+    cur = {".ds-crawler-logs-generic-default-2026.06.11-000002": 0,
+           ".ds-rookhub-logs-generic-default-2026.06.11-000002": 7000}
+    base = {".ds-crawler-logs-generic-default-2026.06.11-000001": 1200,
+            ".ds-rookhub-logs-generic-default-2026.06.11-000002": 5000}
+    sigs = rules.evaluate_index_silence(cur, base, c, 24)
+    silent = [s for s in sigs if s.kind == "index_silent"]
+    assert len(silent) == 1
+    assert "crawler-logs-generic-default" in silent[0].detail
+
+
+def test_index_silent_classic_index_unaffected():
+    # Klassische (Nicht-.ds-) Indizes werden weiter einzeln geprüft.
+    c = _cfg()
+    cur = {"rookhub-logs-2026.06": 0, "other-2026.06": 100}
+    base = {"rookhub-logs-2026.06": 4561, "other-2026.06": 50}
+    sigs = rules.evaluate_index_silence(cur, base, c, 24)
+    silent = [s for s in sigs if s.kind == "index_silent"]
+    assert len(silent) == 1
+    assert "rookhub-logs-2026.06" in silent[0].detail
