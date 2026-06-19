@@ -48,6 +48,14 @@ False-Positives niedrig.
 | `ingestion_stopped` | high | gesamt 0 Logs → Pipeline evtl. tot |
 | `index_silent` | high | ein Index verstummt, während andere weiterloggen (Teil-Ausfall) |
 | `heartbeat_missing` | high | ein Dienst hat in den letzten N min KEIN Lebenszeichen geschrieben (vermutlich tot/hängend) — pro Dienst, genauer als Index-Stille |
+| `suspicious_requests` | high | Aufrufe auf bekannte Scanner-/Exploit-Pfade (`.env`, `wp-login`, `phpMyAdmin`, `/.git`, Pfad-Traversal, `.php` gegen die .NET-API …), die mit 4xx/5xx enden — jemand klopft die API ab |
+| `api_scan` | high | eine einzelne Quell-IP erzeugt viele 4xx über viele **verschiedene** Pfade → Pfad-Enumeration/Fuzzing (legitime, wiederholte 404 auf wenige Endpunkte lösen dadurch NICHT aus) |
+| `auth_bruteforce` | high | eine Quell-IP sammelt viele abgelehnte Auth-Antworten (401/403) → möglicher Brute-Force/Credential-Stuffing |
+
+Die drei **Security-Signale** sind „große Warnungen": Wird eines bestätigt, wird der Alarm
+immer als `HIGH` mit 🚨-Betreff gesendet — der LLM darf einen erkannten Scan nicht zu
+„nicht auffällig" herabstufen. Sie werten die HTTP-Zugriffslogs (Requests mit Statuscode)
+desselben Fensters aus; abschaltbar/justierbar über `SECURITY_*` (s.u.).
 
 Die Alarm-Mail wird als **HTML** (mit farbigen Severity-Badges + Level-Tabelle Aktuell-vs-Baseline) **plus Plaintext-Fallback** verschickt.
 
@@ -80,6 +88,13 @@ Siehe `.env.example`. Wichtigste Werte:
 | `HEARTBEAT_CHECKS` | `rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,schach-bot=rookhub-logs-*=ClientLog heartbeat_bot` | erwartete Lebenszeichen als `name=index=phrase`-Tripel (komma-getrennt); `phrase` wird per `match_phrase` gegen das gerenderte Message-Feld geprüft |
 | `HEARTBEAT_MAX_STALENESS_MINUTES` | `5` | kein passender Heartbeat in diesem Fenster → `heartbeat_missing`. `0` = Heartbeat-Prüfung aus |
 | `MIN_ERRORS` / `ERROR_SPIKE_FACTOR` | `5` / `3.0` | Spike-Schwellen |
+| `SECURITY_CHECK` | `true` | Security-Heuristik (API-Abklopfen erkennen) an/aus |
+| `SECURITY_MIN_SUSPICIOUS` | `3` | ab so vielen Treffern auf verdächtige Pfade (4xx/5xx) → `suspicious_requests` |
+| `SECURITY_SCAN_MIN_4XX` / `SECURITY_SCAN_MIN_PATHS` | `40` / `15` | `api_scan`: ab so vielen 4xx **und** so vielen verschiedenen Pfaden je Quell-IP |
+| `SECURITY_AUTH_FAIL_THRESHOLD` | `25` | ab so vielen 401/403 je Quell-IP → `auth_bruteforce` |
+| `SECURITY_PATH_TOKENS` | (Default-Liste) | komma-getrennte Pfad-Substrings (case-insensitiv), die als verdächtig gelten; leer = eingebaute Liste |
+| `SECURITY_STATUS_FIELD` / `SECURITY_PATH_FIELD` / `SECURITY_IP_FIELD` | `http.response.status_code` / `url.path` / `labels.IpAddress` | Felder der Zugriffslogs (ECS/Serilog-Defaults) |
+| `SECURITY_TOP_IPS` | `20` | wie viele Quell-IPs je Fenster auf Enumeration/Brute-Force geprüft werden |
 | `ANTHROPIC_API_KEY` | – | optional; ohne → rein regelbasiert |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | günstiges Monitoring-Modell |
 | `SMTP_*` | – | Mailversand (Pflicht außer `DRY_RUN=true`) |

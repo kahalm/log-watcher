@@ -89,6 +89,27 @@ class Config:
     alert_on_new_signatures: bool = field(default_factory=lambda: _bool("ALERT_ON_NEW_SIGNATURES", True))
     ingestion_drop_check: bool = field(default_factory=lambda: _bool("INGESTION_DROP_CHECK", True))
 
+    # --- Security-Heuristik (systematisches API-Abklopfen durch Clients erkennen) ---
+    # Wertet HTTP-Zugriffslogs (Requests mit Statuscode) des Fensters aus. Feuert „große
+    # Warnungen" (high) bei Scanner-/Exploit-Pfaden, Pfad-Enumeration und Auth-Brute-Force.
+    security_check: bool = field(default_factory=lambda: _bool("SECURITY_CHECK", True))
+    # Mindestzahl Treffer auf verdächtige Pfade (s. security_path_tokens), ab der gewarnt wird.
+    security_min_suspicious: int = field(default_factory=lambda: _int("SECURITY_MIN_SUSPICIOUS", 3))
+    # Pfad-Enumeration: ab so vielen 4xx UND so vielen VERSCHIEDENEN Pfaden je Quell-IP.
+    # (Hohe Pfad-Vielfalt unterscheidet einen Scan von legitimen, wiederholten 404 auf wenige Endpunkte.)
+    security_scan_min_4xx: int = field(default_factory=lambda: _int("SECURITY_SCAN_MIN_4XX", 40))
+    security_scan_min_paths: int = field(default_factory=lambda: _int("SECURITY_SCAN_MIN_PATHS", 15))
+    # Auth-Brute-Force: ab so vielen abgelehnten Auth-Antworten (401/403) je Quell-IP.
+    security_auth_fail_threshold: int = field(default_factory=lambda: _int("SECURITY_AUTH_FAIL_THRESHOLD", 25))
+    # Felder der Zugriffslogs (Serilog/ECS-Defaults; alle direkt aggregierbar).
+    security_status_field: str = field(default_factory=lambda: _str("SECURITY_STATUS_FIELD", "http.response.status_code"))
+    security_path_field: str = field(default_factory=lambda: _str("SECURITY_PATH_FIELD", "url.path"))
+    security_ip_field: str = field(default_factory=lambda: _str("SECURITY_IP_FIELD", "labels.IpAddress"))
+    # Wie viele Quell-IPs (Top nach Request-Zahl) je Fenster auf Enumeration/Brute-Force geprüft werden.
+    security_top_ips: int = field(default_factory=lambda: _int("SECURITY_TOP_IPS", 20))
+    # Verdächtige Pfad-Substrings (case-insensitiv); leer = Default-Liste aus security.py.
+    security_path_tokens: list = field(default_factory=lambda: _list("SECURITY_PATH_TOKENS", ""))
+
     # --- LLM (Anthropic) ---
     anthropic_api_key: "str | None" = field(default_factory=lambda: _str("ANTHROPIC_API_KEY"))
     model: str = field(default_factory=lambda: _str("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"))

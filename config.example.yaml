@@ -16,6 +16,12 @@ defaults:
   index_silent_window_hours: 24
   interval_seconds: 21600
   cooldown_hours: 12
+  # Security-Heuristik (API-Abklopfen erkennen) ist standardmäßig an; hier justierbar
+  # oder per Target ausschaltbar (security_check: false) — z.B. für Targets ohne HTTP-Zugriffslogs.
+  # security_check: true
+  # security_scan_min_4xx: 40
+  # security_scan_min_paths: 15
+  # security_auth_fail_threshold: 25
   # gemeinsamer Kanal-/State-/HTTP-Teil:
   # smtp_host: smtp.example.com
   # smtp_from: log-watcher@oberschmid.homes

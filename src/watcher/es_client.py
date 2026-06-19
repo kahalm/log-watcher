@@ -149,6 +149,81 @@ class ESClient:
         buckets = resp.get("aggregations", {}).get("by_index", {}).get("buckets", [])
         return {b["key"]: b["doc_count"] for b in buckets}
 
+    def security_window(self, start_iso: str, end_iso: str) -> dict:
+        """Aggregiert HTTP-Zugriffslogs des Fensters für die Security-Heuristik.
+
+        Scope: Dokumente mit vorhandenem Statuscode-Feld (= Zugriffslogs, vgl. `request`-Tag).
+        Liefert {total_requests, suspicious:{count,paths,ips}, by_ip:{ip:{total,c4xx,auth_fail,
+        distinct_paths}}}. Bei 4xx (Feld nicht aggregierbar) leeres Ergebnis statt Zyklus-Abbruch;
+        Verbindungs-/Serverfehler werden weitergereicht.
+        """
+        from .security import DEFAULT_PATH_TOKENS
+        cfg = self.cfg
+        status_f, path_f, ip_f = cfg.security_status_field, cfg.security_path_field, cfg.security_ip_field
+        tokens = cfg.security_path_tokens or DEFAULT_PATH_TOKENS
+
+        suspicious_should = [
+            {"wildcard": {path_f: {"value": f"*{t}*", "case_insensitive": True}}} for t in tokens
+        ]
+        aggs = {
+            "by_ip": {
+                "terms": {"field": ip_f, "size": max(1, cfg.security_top_ips)},
+                "aggs": {
+                    "c4xx": {"filter": {"range": {status_f: {"gte": 400, "lt": 500}}}},
+                    "auth_fail": {"filter": {"terms": {status_f: [401, 403]}}},
+                    "distinct_paths": {"cardinality": {"field": path_f}},
+                },
+            },
+        }
+        if suspicious_should:
+            # Treffer zusätzlich auf 4xx/5xx einschränken: ein echtes „Abklopfen" trifft Pfade,
+            # die es auf dieser API nicht gibt (→ 404). So matchen legitime Endpoints, die zufällig
+            # ein Token als Teilstring enthalten (z.B. .../config), nicht (die antworten 2xx).
+            aggs["suspicious"] = {
+                "filter": {"bool": {
+                    "must": [{"range": {status_f: {"gte": 400}}}],
+                    "should": suspicious_should, "minimum_should_match": 1,
+                }},
+                "aggs": {
+                    "paths": {"terms": {"field": path_f, "size": 10}},
+                    "ips": {"terms": {"field": ip_f, "size": 10}},
+                },
+            }
+        body = {
+            "size": 0, "track_total_hits": True,
+            "query": {"bool": {"filter": [self._range(start_iso, end_iso), {"exists": {"field": status_f}}]}},
+            "aggs": aggs,
+        }
+        try:
+            resp = self._search(body)
+        except ESError as e:
+            if e.status is None or e.status >= 500:
+                raise
+            log.warning("security_window reduziert (Feld nicht aggregierbar?): %s", e)
+            return {"total_requests": 0, "suspicious": {"count": 0, "paths": {}, "ips": {}}, "by_ip": {}}
+        return self._parse_security(resp)
+
+    @staticmethod
+    def _parse_security(resp: dict) -> dict:
+        aggs = resp.get("aggregations", {})
+        total = resp.get("hits", {}).get("total", {})
+        total_count = total.get("value", 0) if isinstance(total, dict) else (total or 0)
+        susp_agg = aggs.get("suspicious", {})
+        suspicious = {
+            "count": int(susp_agg.get("doc_count", 0)),
+            "paths": {str(b["key"]): b["doc_count"] for b in susp_agg.get("paths", {}).get("buckets", [])},
+            "ips": {str(b["key"]): b["doc_count"] for b in susp_agg.get("ips", {}).get("buckets", [])},
+        }
+        by_ip = {}
+        for b in aggs.get("by_ip", {}).get("buckets", []):
+            by_ip[str(b["key"])] = {
+                "total": b.get("doc_count", 0),
+                "c4xx": int(b.get("c4xx", {}).get("doc_count", 0)),
+                "auth_fail": int(b.get("auth_fail", {}).get("doc_count", 0)),
+                "distinct_paths": int(b.get("distinct_paths", {}).get("value", 0)),
+            }
+        return {"total_requests": total_count, "suspicious": suspicious, "by_ip": by_ip}
+
     def ensure_alert_template(self, prefix: str) -> None:
         """Index-Template für die Alert-Indizes: replicas=0 (Single-Node bleibt green)."""
         name = f"{prefix}-template"

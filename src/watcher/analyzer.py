@@ -33,7 +33,10 @@ _SYSTEM = (
     "die bereits ausgelösten Heuristik-Signale. Entscheide, ob das eine ECHTE, handlungs"
     "bedürftige Auffälligkeit ist (anomalous=true) oder erwartbares Rauschen. Sei konservativ: "
     "im Zweifel anomalous=false. Fasse knapp und konkret zusammen. Du siehst Aggregate/Zähler, "
-    "Message-Templates und ggf. einige bereits REDIGIERTE Beispiel-Logzeilen (PII/Secrets entfernt)."
+    "Message-Templates und ggf. einige bereits REDIGIERTE Beispiel-Logzeilen (PII/Secrets entfernt). "
+    "Sicherheitssignale (suspicious_requests, api_scan, auth_bruteforce) bedeuten, dass ein Client die "
+    "API systematisch abklopft (Scanner-Pfade, Pfad-Enumeration, Brute-Force) — das ist IMMER auffällig "
+    "(anomalous=true, severity=high); nenne in der Empfehlung das Blocken der Quell-IP."
 )
 
 

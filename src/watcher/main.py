@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from . import __version__
 from .config import Config, load_targets
 from .es_client import ESClient, ESError
-from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver, digest, discord_notify
+from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver, digest, discord_notify, security
 from . import fingerprint as fp
 from .metrics import METRICS
 
@@ -117,6 +117,15 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         except ESError as e:
             log.warning("Heartbeat-Prüfung übersprungen: %s", e)
 
+    # Security-Heuristik: systematisches API-Abklopfen (Scanner-Pfade, Pfad-Enumeration,
+    # Auth-Brute-Force) über die HTTP-Zugriffslogs desselben Fensters erkennen.
+    if cfg.security_check:
+        try:
+            sec = es.security_window(_iso(now - win), _iso(now))
+            signals += security.evaluate_security(sec, cfg)
+        except ESError as e:
+            log.warning("Security-Prüfung übersprungen: %s", e)
+
     METRICS.add_signals([s.kind for s in signals])
 
     # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9).
@@ -158,6 +167,16 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             METRICS.inc("llm_tokens_total", assessment.get("llm_tokens", 0))
         state.put_verdict(st, cfg.name, sig, assessment, now_ts)
 
+    # Bestätigte Security-Signale sind immer eine „große Warnung": der LLM darf einen
+    # erkannten Scan/Brute-Force nicht zu „nicht auffällig" herabstufen.
+    security_signals = [s for s in signals if s.kind in security.SECURITY_KINDS]
+    if security_signals:
+        assessment["anomalous"] = True
+        assessment["severity"] = "high"
+        if not assessment.get("summary"):
+            assessment["summary"] = ("🚨 Sicherheitsrelevante Auffälligkeit: "
+                                     + " ".join(s.detail for s in security_signals))
+
     log.info("Beurteilung: anomalous=%s severity=%s llm=%s",
              assessment.get("anomalous"), assessment.get("severity"), assessment.get("llm_used"))
 
@@ -169,7 +188,10 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     severity = assessment.get("severity", rules.overall_severity(signals))
     # Target-Name in den Betreff/Titel: bei mehreren ES-Instanzen mit identischen Index-Namen
     # (z.B. rookhub-prod vs. rookhub-dev, beide rookhub-logs-*) sonst nicht auseinanderzuhalten.
-    subject = f"[log-watcher][{cfg.name}][{severity.upper()}] Auffälligkeit in {', '.join(cfg.es_indices)}"
+    if security_signals:
+        subject = f"[log-watcher][{cfg.name}][{severity.upper()}] 🚨 Sicherheits-Alarm in {', '.join(cfg.es_indices)}"
+    else:
+        subject = f"[log-watcher][{cfg.name}][{severity.upper()}] Auffälligkeit in {', '.join(cfg.es_indices)}"
     text_body = notifier.build_email_body(assessment, signals, current, baseline, cfg)
     html_body = notifier.build_email_html(assessment, signals, current, baseline, cfg)
 
@@ -270,6 +292,11 @@ def replay(cfg: Config, es: ESClient, start_dt: datetime, end_dt: datetime) -> i
                 signals += rules.evaluate_index_silence(cur_idx, base_idx, cfg, cfg.index_silent_window_hours)
             except ESError as e:
                 log.warning("REPLAY: Index-Stille-Prüfung übersprungen: %s", e)
+        if cfg.security_check:
+            try:
+                signals += security.evaluate_security(es.security_window(_iso(cursor - win), _iso(cursor)), cfg)
+            except ESError as e:
+                log.warning("REPLAY: Security-Prüfung übersprungen: %s", e)
         if signals:
             fired += 1
             log.info("REPLAY %s: %s", _iso(cursor), " | ".join(f"{s.kind}: {s.detail}" for s in signals))

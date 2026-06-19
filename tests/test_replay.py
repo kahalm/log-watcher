@@ -15,6 +15,9 @@ class _FakeES:
     def per_index_counts(self, a, b):
         return {}   # Index-Stille-Prüfung (eigenes Fenster) — hier neutral
 
+    def security_window(self, a, b):
+        return {"total_requests": 100, "suspicious": {"count": 0, "paths": {}, "ips": {}}, "by_ip": {}}
+
 
 def test_replay_steps_full_windows():
     cfg = Config()  # window_hours=6, baseline previous -> 2 Aggregate je Fenster
