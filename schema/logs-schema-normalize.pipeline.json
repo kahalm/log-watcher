@@ -28,6 +28,12 @@
     { "set": { "field": "log.level",    "value": "Information", "override": false } },
     { "set": { "field": "service.name", "value": "unknown",     "override": false } },
 
+    { "script": {
+        "description": "Dienst-gesetzte Domaenen-Tags: 'LogTags' (Komma-Liste) aus labels und/oder metadata in das ECS-Array 'tags' falten (dedupe, idempotent, wirft nie).",
+        "lang": "painless",
+        "source": "def sources = new ArrayList(); if (ctx.labels != null) { sources.add(ctx.labels.remove('LogTags')); } if (ctx.metadata != null) { sources.add(ctx.metadata.remove('LogTags')); } if (!sources.isEmpty()) { if (ctx.tags == null) { ctx.tags = new ArrayList(); } else if (!(ctx.tags instanceof List)) { def t = ctx.tags; ctx.tags = new ArrayList(); ctx.tags.add(t); } for (def raw : sources) { if (raw == null) { continue; } if (!(raw instanceof String)) { continue; } for (def part : raw.splitOnToken(',')) { def tag = part.trim(); if (tag.length() > 0 && !ctx.tags.contains(tag)) { ctx.tags.add(tag); } } } }"
+    } },
+
     { "append": { "field": "tags", "value": ["heartbeat"], "allow_duplicates": false,
                   "if": "ctx.message != null && (ctx.message.contains('Heartbeat:') || ctx.message.contains('heartbeat_bot'))" } },
     { "append": { "field": "tags", "value": ["healthcheck"], "allow_duplicates": false,

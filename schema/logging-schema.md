@@ -46,6 +46,46 @@ Damit auch **historische** rohe Logs greifen, normalisiert die Pipeline die Requ
 Neue Dienste mit abweichenden Mustern setzen den Tag selbst (`tags: ["…"]`) oder nehmen ihr
 Muster in die Pipeline-Bedingung auf.
 
+### Dienst-gesetzte Domänen-Tags
+
+Manche Marker kann die Heuristik **nicht** aus strukturellen Signalen ableiten — sie hängen vom
+fachlichen Kontext ab (welcher Job, welche Quelle). Diese setzen die Dienste selbst. Das
+kanonische Vokabular (bitte **nur** diese Werte verwenden, damit Filter/Dashboards stabil bleiben):
+
+| Tag | Dienst | Bedeutung |
+|-----|--------|-----------|
+| `crawl` | `chessresults_crawler` | Crawl-Lauf gegen chess-results.com |
+| `upstream` | `chessresults_crawler` | Upstream-/Quell-Fehler (Timeout, 5xx, Hänger von chess-results.com) |
+| `clientlog` | `RookHub.Api` | vom Browser-Client eingereichte Logs (z.B. Engine-/Analyse-Fehler) |
+| `engine` | `RookHub.Api` | Schach-Engine/Analyse (WASM-Engine, Stellungsbewertung) |
+| `import` | `RookHub.Api` | Import-/Aufbereitungs-Pipeline (Kurse, Repertoires, PGN) |
+| `chessable` | `PirateChess.Api` | Chessable-bezogene Verarbeitung |
+| `scrape` | `PirateChess.Api` | Scraping-Lauf (Chessable-Inhalte abrufen) |
+| `import` | `PirateChess.Api` | Import-/Aufbereitungs-Pipeline |
+| `daily` | `schach-bot` | Tagespuzzle-Posting/-Verarbeitung |
+| `weekly` | `schach-bot` | Wochenpost-Posting/-Verarbeitung |
+| `puzzle` | `schach-bot` | Puzzle-bezogene Aktionen |
+| `motivation` | `schach-bot` | Motivations-DMs/Statistik-Nachrichten |
+
+**Konvention — wie ein Dienst diese Tags setzt:**
+
+- **C#/Serilog-Dienste** (`RookHub.Api`, `PirateChess.Api`, `chessresults_crawler`, `schach-bot`)
+  setzen **keine** ECS-`tags` direkt, sondern pushen eine Serilog-Property **`LogTags`** als
+  **kommagetrennten String**, z.B.:
+  ```csharp
+  using (LogContext.PushProperty("LogTags", "import,chessable"))
+  {
+      // ... Logs in diesem Scope tragen die Tags import + chessable
+  }
+  ```
+  Die zentrale Ingest-Pipeline faltet `LogTags` in das ECS-Array `tags` (splittet an Kommas,
+  trimmt, dedupliziert) und entfernt die Hilfs-Property danach. Sie liest `LogTags` robust sowohl
+  aus `labels.LogTags` als auch aus `metadata.LogTags` aus — je nachdem, wohin der ECS-Serilog-
+  Formatter eine skalare String-Property routet. Nicht-Strings/leere Werte werden ignoriert
+  (idempotent, wirft nie).
+- **Python-/sonstige ECS-Dienste** setzen das ECS-Array **`tags` direkt** im Log-Dokument
+  (`"tags": ["daily"]`). Das ist mit den heuristischen `append`-Blöcken voll kompatibel.
+
 **Discover-Default** „Alle Logs (ohne Heartbeat)" filtert `not tags: (heartbeat or healthcheck)`.
 Die übrigen Tags sind Filter-Dimensionen (z.B. nur `tags: auth` für Security-Sicht).
 
@@ -66,6 +106,7 @@ auf die kanonischen Felder um (idempotent, `ignore_missing`):
 | `fields.MachineName` | `host.name` |
 | `labels.Application` / `fields.Application` (falls `service.name` leer) | `service.name` |
 | `labels.Environment` (falls leer) | `service.environment` |
+| `labels.LogTags` / `metadata.LogTags` (Komma-String) | gesplittet/getrimmt → `tags[]` (Property danach entfernt) |
 
 Fehlt `log.level`, wird `Information` gesetzt; fehlt `service.name`, wird `unknown` gesetzt.
 Jedes normalisierte Dokument erhält `labels.schema_version: "1"`. Fehler in der Pipeline
