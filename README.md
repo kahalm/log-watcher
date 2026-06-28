@@ -6,7 +6,7 @@ Regel-Gate entscheidet zuerst, ob überhaupt etwas Verdächtiges vorliegt — nu
 **Anthropic-LLM** zur Beurteilung + Klartext-Zusammenfassung bemüht. Das hält Kosten und
 False-Positives niedrig.
 
-💬 **Community / Fragen?** Komm in unseren Discord: https://discord.gg/nKQCdC7Xff
+💬 **Community / Fragen?** Komm in unseren Discord: https://discord.gg/wczc4BJtMf
 
 ```
         alle X h
