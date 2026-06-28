@@ -44,7 +44,7 @@ False-Positives niedrig.
 | Signal | Schwere | Bedeutung |
 |--------|---------|-----------|
 | `error_spike` | medium | `Error/Fatal`-Anzahl ≥ `MIN_ERRORS` **und** ≥ `ERROR_SPIKE_FACTOR` × Vorfenster |
-| `warn_spike` | low | `Warning`-Anzahl ≥ `MIN_WARNINGS` **und** ≥ `WARN_SPIKE_FACTOR` × Vorfenster (lauter → höhere Schwelle, via `ALERT_ON_WARN_SPIKE` abschaltbar) |
+| `warn_spike` | low | `Warning`-Anzahl ≥ `MIN_WARNINGS` **und** ≥ `WARN_SPIKE_FACTOR` × Vorfenster (lauter → höhere Schwelle, via `ALERT_ON_WARN_SPIKE` abschaltbar). By-design-Rausch-Templates über `WARN_SPIKE_IGNORE` (bzw. `warn_spike_ignore` je Target) aus dem Count herausrechnen — erfordert ein aggregierbares `message_field` (ECS: `labels.MessageTemplate`) |
 | `fatal` | high | mind. ein `Fatal`/`Critical`-Eintrag |
 | `new_errors` | medium | per Fingerprint gruppierte Fehler, die *erstmalig* (nicht nur seit Vorfenster) auftreten |
 | `ingestion_stopped` | high | gesamt 0 Logs → Pipeline evtl. tot |

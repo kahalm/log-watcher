@@ -86,6 +86,13 @@ class Config:
     min_warnings: int = field(default_factory=lambda: _int("MIN_WARNINGS", 20))
     warn_spike_factor: float = field(default_factory=lambda: _float("WARN_SPIKE_FACTOR", 3.0))
     alert_on_warn_spike: bool = field(default_factory=lambda: _bool("ALERT_ON_WARN_SPIKE", True))
+    # Warnungs-Templates, die NICHT zum warn_spike zählen: by-design-Rauschen, das als
+    # Warnung geloggt wird, aber kein Vorfall ist (z.B. piratechess softFail-Retries
+    # "curl exited with code …" bei wackeligem VPN-Exit). Case-insensitiver Teilstring-
+    # Match gegen das Message/Template-Feld; passende Warnungen werden vom warn_spike-
+    # Count (aktuell UND Vorfenster) abgezogen. Erfordert ein korrekt aggregierbares
+    # message_field (bei ECS-Logs: labels.MessageTemplate). Leer = nichts ignorieren.
+    warn_spike_ignore: list = field(default_factory=lambda: _list("WARN_SPIKE_IGNORE", ""))
     alert_on_new_signatures: bool = field(default_factory=lambda: _bool("ALERT_ON_NEW_SIGNATURES", True))
     ingestion_drop_check: bool = field(default_factory=lambda: _bool("INGESTION_DROP_CHECK", True))
 

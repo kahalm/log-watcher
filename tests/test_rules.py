@@ -57,6 +57,54 @@ def test_warn_spike():
     assert "error_spike" not in kinds  # keine Fehler -> kein error_spike
 
 
+def test_warn_spike_ignore_suppresses_softfail_noise():
+    import os
+    os.environ["WARN_SPIKE_IGNORE"] = "curl exited with code"
+    try:
+        c = Config()  # min_warnings=20, warn_spike_factor=3.0
+        # 44 curl-softFail-Warnungen + 3 echte -> ohne Filter würde warn_spike feuern;
+        # nach Abzug der 44 ignorierten bleiben 3 < MIN_WARNINGS(20) -> kein Signal.
+        current = {"total": 5000, "levels": {"Warning": 47},
+                   "error_messages": {"curl exited with code {Code}: {Stderr}": 44, "echtes problem": 3}}
+        baseline = {"total": 5000, "levels": {"Warning": 1}, "error_messages": {}}
+        assert "warn_spike" not in [s.kind for s in rules.evaluate(current, baseline, c)]
+    finally:
+        del os.environ["WARN_SPIKE_IGNORE"]
+
+
+def test_warn_spike_still_fires_for_non_ignored_warnings():
+    import os
+    os.environ["WARN_SPIKE_IGNORE"] = "curl exited with code"
+    try:
+        c = Config()
+        # 44 ignorierte + 30 echte Warnungen -> nach Abzug 30 >= MIN(20) und >> Baseline -> feuert.
+        current = {"total": 5000, "levels": {"Warning": 74},
+                   "error_messages": {"curl exited with code {Code}: {Stderr}": 44, "echtes problem": 30}}
+        baseline = {"total": 5000, "levels": {"Warning": 2}, "error_messages": {}}
+        sigs = rules.evaluate(current, baseline, c)
+        warn = [s for s in sigs if s.kind == "warn_spike"]
+        assert len(warn) == 1
+        assert "30 Warnungen" in warn[0].detail        # ignorierte sind abgezogen
+        assert "44 ignorierte" in warn[0].detail        # und transparent ausgewiesen
+    finally:
+        del os.environ["WARN_SPIKE_IGNORE"]
+
+
+def test_warn_spike_ignore_also_skips_new_errors():
+    # Ein ignoriertes Template darf KEIN Signal auslösen — auch nicht new_errors
+    # (sonst wandert das Rauschen nur vom warn_spike- ins new_errors-Signal).
+    import os
+    os.environ["WARN_SPIKE_IGNORE"] = "curl exited with code"
+    try:
+        c = Config()
+        current = {"total": 100, "levels": {"Warning": 5},
+                   "error_messages": {"curl exited with code {Code}: {Stderr}": 5}}
+        baseline = {"total": 100, "levels": {"Warning": 0}, "error_messages": {}}
+        assert [s.kind for s in rules.evaluate(current, baseline, c)] == []
+    finally:
+        del os.environ["WARN_SPIKE_IGNORE"]
+
+
 def test_no_warn_spike_below_min():
     c = _cfg()
     current = {"total": 500, "levels": {"Warning": 12}, "error_messages": {}}

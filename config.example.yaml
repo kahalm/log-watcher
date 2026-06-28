@@ -56,3 +56,12 @@ targets:
     es_indices: [piratechess-logs-*]
     baseline_mode: last_week
     alert_index_prefix: log-watcher-alerts
+    # ECS-Logs legen das Roh-Template unter labels.MessageTemplate ab (NICHT unter dem
+    # Default messageTemplate.keyword) — ohne diese Zeile bleiben error_messages/Neu-
+    # Signatur-Erkennung UND der warn_spike_ignore-Abgleich leer.
+    message_field: labels.MessageTemplate
+    # piratechess loggt bei wackeligem VPN-Exit "curl exited with code …" als WARNUNG
+    # (softFail + Retry, kein Vorfall). Aus dem warn_spike-Count herausrechnen, damit
+    # solche Import-Episoden keinen Fehlalarm auslösen:
+    warn_spike_ignore:
+      - "curl exited with code"

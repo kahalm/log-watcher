@@ -40,6 +40,31 @@ def _count_levels(levels: dict, names) -> int:
     return sum(levels.get(n, 0) for n in names)
 
 
+def _ignore_patterns(cfg) -> "list[str]":
+    """`warn_spike_ignore` als kleingeschriebene Teilstring-Liste (oder leer)."""
+    return [p.lower() for p in (getattr(cfg, "warn_spike_ignore", None) or [])]
+
+
+def _is_ignored(msg: str, pats: "list[str]") -> bool:
+    low = str(msg).lower()
+    return any(p in low for p in pats)
+
+
+def _ignored_warn_count(window: dict, cfg) -> int:
+    """Summe der Warnungen, deren Message/Template einen der konfigurierten
+    `warn_spike_ignore`-Teilstrings enthält (case-insensitiv). Diese gelten als
+    by-design-Rauschen und werden vom warn_spike-Count abgezogen.
+
+    Quelle ist `error_messages` (Top-Templates über Error+Warning). Die Ignore-Liste
+    ist für WARNUNGS-Templates gedacht; der Abzug wird beim Aufrufer auf den Warn-Count
+    und auf >=0 begrenzt, damit ein versehentlich passendes Fehler-Template nicht in den
+    Negativbereich rutscht."""
+    pats = _ignore_patterns(cfg)
+    if not pats:
+        return 0
+    return sum(cnt for msg, cnt in window.get("error_messages", {}).items() if _is_ignored(msg, pats))
+
+
 def evaluate(current: dict, baseline: dict, cfg, known_fingerprints=None) -> "list[Signal]":
     signals: list[Signal] = []
     cur_err = _count_levels(current["levels"], cfg.error_levels)
@@ -55,10 +80,17 @@ def evaluate(current: dict, baseline: dict, cfg, known_fingerprints=None) -> "li
     if cfg.alert_on_warn_spike:
         cur_warn = _count_levels(current["levels"], cfg.warn_levels)
         base_warn = _count_levels(baseline["levels"], cfg.warn_levels)
+        # by-design-Rauschen (z.B. softFail-Retries) vor der Schwellenprüfung abziehen.
+        ignored_cur = _ignored_warn_count(current, cfg)
+        ignored_base = _ignored_warn_count(baseline, cfg)
+        cur_warn = max(0, cur_warn - ignored_cur)
+        base_warn = max(0, base_warn - ignored_base)
         if cur_warn >= cfg.min_warnings and cur_warn >= base_warn * cfg.warn_spike_factor:
-            signals.append(Signal(
-                "warn_spike", "low",
-                f"{cur_warn} Warnungen im Fenster (Vorfenster: {base_warn}, Schwelle Faktor {cfg.warn_spike_factor})."))
+            detail = (f"{cur_warn} Warnungen im Fenster (Vorfenster: {base_warn}, "
+                      f"Schwelle Faktor {cfg.warn_spike_factor}).")
+            if ignored_cur:
+                detail += f" ({ignored_cur} ignorierte Warnung(en) bereits abgezogen.)"
+            signals.append(Signal("warn_spike", "low", detail))
 
     # 2) Fatal/Critical immer melden.
     fatal_levels = [l for l in cfg.error_levels if l.lower() in ("fatal", "critical")]
@@ -70,8 +102,12 @@ def evaluate(current: dict, baseline: dict, cfg, known_fingerprints=None) -> "li
     #    known_fingerprints übergeben – nur wirklich erstmalig gesehene (Feature 9),
     #    nicht bloß "fehlt im Vorfenster".
     if cfg.alert_on_new_signatures:
-        cur_fps = {fingerprint(m) for m in current.get("error_messages", {})}
-        base_fps = {fingerprint(m) for m in baseline.get("error_messages", {})}
+        # Explizit ignorierte Templates (warn_spike_ignore) sind by-design-Rauschen und
+        # dürfen AUCH new_errors nicht auslösen — sonst verschiebt der message_field-Fix
+        # das Rauschen nur vom warn_spike- ins new_errors-Signal.
+        pats = _ignore_patterns(cfg)
+        cur_fps = {fingerprint(m) for m in current.get("error_messages", {}) if not _is_ignored(m, pats)}
+        base_fps = {fingerprint(m) for m in baseline.get("error_messages", {}) if not _is_ignored(m, pats)}
         new_fps = cur_fps - base_fps
         if known_fingerprints is not None:
             new_fps -= set(known_fingerprints)
