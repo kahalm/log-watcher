@@ -60,6 +60,28 @@ def _build_time_str() -> str:
         return raw
 
 
+def _report_build_to_rookhub() -> None:
+    """Meldet die laufende Build-SHA/Ref an rookhubs Admin-CI (Push-Modell) — rookhub kann log-watcher
+    nicht per HTTP erreichen (eigenes Docker-Netz), also meldet log-watcher aktiv. Best-effort:
+    ohne ROOKHUB_BUILD_REPORT_URL/CI_BUILD_REPORT_SECRET passiert nichts, Fehler werden nur geloggt."""
+    url = os.environ.get("ROOKHUB_BUILD_REPORT_URL", "").strip()
+    secret = os.environ.get("CI_BUILD_REPORT_SECRET", "").strip()
+    if not url or not secret:
+        return
+    import requests
+    payload = {
+        "repo": os.environ.get("BUILD_REPORT_REPO", "log-watcher"),
+        "sha": os.environ.get("GIT_SHA", ""),
+        "ref": os.environ.get("GIT_REF", ""),
+    }
+    try:
+        resp = requests.post(url, json=payload, headers={"X-Build-Report-Key": secret}, timeout=5)
+        if resp.status_code >= 300:
+            log.warning("Build-Report an rookhub: HTTP %s", resp.status_code)
+    except Exception as e:  # noqa: BLE001 — darf den Start/Zyklus nie stören
+        log.warning("Build-Report an rookhub fehlgeschlagen: %s", e)
+
+
 def _startup_message(targets) -> str:
     return (f"🟢 log-watcher online — v{__version__}, "
             f"Image gebaut um {_build_time_str()}. "
@@ -432,6 +454,7 @@ def main() -> int:
     METRICS.start(now.timestamp())
     httpserver.start_http_server(glob)
     health.write_heartbeat(glob.heartbeat_file)
+    _report_build_to_rookhub()   # laufendes Image an rookhubs Admin-CI melden (Push)
 
     for cfg, es in clients:
         startup_probe(cfg, es, now)
@@ -457,6 +480,7 @@ def main() -> int:
 
     while not _stop.is_set():
         cycle_now = datetime.now(timezone.utc)
+        _report_build_to_rookhub()   # je Zyklus erneut melden (überlebt rookhub-api-Neustarts)
         for cfg, es in clients:
             try:
                 run_cycle(cfg, es, cycle_now)

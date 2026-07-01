@@ -12,6 +12,11 @@ services:
     container_name: log-watcher
     restart: unless-stopped
     env_file: .env
+    # Optional: laufendes Image an rookhubs Admin-CI melden (Push-Modell — rookhub erreicht diesen
+    # Stack nicht direkt). In .env setzen:
+    #   ROOKHUB_BUILD_REPORT_URL=https://<rookhub-domain>/api/ci/build-report
+    #   CI_BUILD_REPORT_SECRET=<gleiches Secret wie rookhubs CI__BuildReportSecret>
+    # GIT_SHA/GIT_REF setzt die CI beim Build; ohne die beiden Variablen passiert nichts.
     stop_grace_period: 20s    # SIGTERM -> sauberes Herunterfahren (Loop bricht ab)
     volumes:
       - ./data:/data          # State (Dedupe/Cooldown/First-seen) + Heartbeat persistent

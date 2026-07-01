@@ -42,6 +42,8 @@ jobs:
           push: true
           build-args: |
             BUILD_TIME=${{ env.BUILD_TIME }}
+            GIT_SHA=${{ github.sha }}
+            GIT_REF=${{ github.ref_name }}
           tags: ${{ steps.meta.outputs.tags }}
           # Labels (u.a. org.opencontainers.image.revision/version) ins Image backen,
           # damit man später am laufenden Image den Git-Commit/die Version ablesen kann.

@@ -7,6 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
 # Build-Zeitstempel (von der CI gesetzt) -> zur Laufzeit lesbar (Start-Meldung).
 ARG BUILD_TIME=unknown
 ENV LOGWATCHER_BUILD_TIME=$BUILD_TIME
+# Build-Herkunft (von der CI gesetzt) -> log-watcher meldet sie an rookhubs Admin-CI (Push-Modell).
+ARG GIT_SHA=
+ARG GIT_REF=
+ENV GIT_SHA=$GIT_SHA
+ENV GIT_REF=$GIT_REF
 
 WORKDIR /app
 
