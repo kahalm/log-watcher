@@ -29,6 +29,27 @@ def _collapse_datastreams(counts: dict) -> dict:
     return collapsed
 
 
+# Klassischer, zeit-suffixierter Index: "<familie>-<yyyy.MM>" (monatlich) oder
+# "<familie>-<yyyy.MM.dd>" (täglich), z. B. "schach-bot-logs-2026.06". Beim
+# Monats-/Tageswechsel verstummt die alte Index (neue Index übernimmt) — für die
+# Stille-Prüfung ist die FAMILIE die Einheit, nicht die einzelne datierte Index.
+_DATED_INDEX = re.compile(r"^(.+?)-\d{4}\.\d{2}(?:\.\d{2})?$")
+
+
+def _collapse_dated_indices(counts: dict) -> dict:
+    """Fasst klassische zeit-suffixierte Indizes (…-yyyy.MM bzw. …-yyyy.MM.dd) unter
+    ihrem Familien-Namen zusammen und summiert die Counts — analog zu Data-Streams.
+    So löst ein Monats-Rollover (alte Monats-Index → 0, neue aktiv) keinen Fehlalarm
+    mehr aus. Bereits auf Stream-Namen kollabierte Data-Streams (kein Datums-Suffix)
+    bleiben unverändert."""
+    collapsed: dict = {}
+    for idx, cnt in counts.items():
+        m = _DATED_INDEX.match(idx)
+        key = m.group(1) if m else idx
+        collapsed[key] = collapsed.get(key, 0) + cnt
+    return collapsed
+
+
 @dataclass
 class Signal:
     kind: str            # error_spike | warn_spike | fatal | new_errors | ingestion_stopped | index_silent | heartbeat_missing
@@ -134,10 +155,11 @@ def evaluate_index_silence(cur_index: dict, base_index: dict, cfg, window_hours:
     signals: list[Signal] = []
     if not cfg.ingestion_drop_check:
         return signals
-    # Data-Stream-Backing-Indizes auf ihren Stream-Namen kollabieren, damit ein
-    # Rollover (altes .ds-…-000001 → 0, neues -000002 aktiv) keinen Fehlalarm auslöst.
-    cur_index = _collapse_datastreams(cur_index)
-    base_index = _collapse_datastreams(base_index)
+    # Familien-bewusst kollabieren, damit ein Rollover keinen Fehlalarm auslöst:
+    #  (1) Data-Stream-Backing-Indizes (.ds-…-000001 → 0, -000002 aktiv) auf den Stream,
+    #  (2) klassische Monats-/Tages-Indizes (…-2026.06 → 0, …-2026.07 aktiv) auf die Familie.
+    cur_index = _collapse_dated_indices(_collapse_datastreams(cur_index))
+    base_index = _collapse_dated_indices(_collapse_datastreams(base_index))
     # Ganze Pipeline still? -> das ist „ingestion_stopped", nicht „index_silent".
     if sum(cur_index.values()) <= 0:
         return signals

@@ -255,12 +255,52 @@ def test_index_silent_still_fires_for_whole_datastream_outage():
     assert "crawler-logs-generic-default" in silent[0].detail
 
 
-def test_index_silent_classic_index_unaffected():
-    # Klassische (Nicht-.ds-) Indizes werden weiter einzeln geprüft.
+def test_index_silent_classic_family_silent_fires_on_family_name():
+    # Klassische datierte Indizes werden auf die Familie kollabiert; ist die ganze
+    # Familie still (kein neuerer Monat aktiv), feuert der Alarm — auf FAMILIEN-Namen.
     c = _cfg()
     cur = {"rookhub-logs-2026.06": 0, "other-2026.06": 100}
     base = {"rookhub-logs-2026.06": 4561, "other-2026.06": 50}
     sigs = rules.evaluate_index_silence(cur, base, c, 24)
     silent = [s for s in sigs if s.kind == "index_silent"]
     assert len(silent) == 1
-    assert "rookhub-logs-2026.06" in silent[0].detail
+    assert "rookhub-logs" in silent[0].detail
+    assert "2026.06" not in silent[0].detail   # Familie, nicht die datierte Einzel-Index
+
+
+# ── Monats-Rollover: alte Monats-Index darf keinen Stille-Fehlalarm auslösen ──
+
+def test_collapse_dated_indices_sums_monthly_family():
+    counts = {
+        "schach-bot-logs-2026.06": 290,
+        "schach-bot-logs-2026.07": 18,
+        "rookhub-logs-generic-default": 7000,   # bereits DS-kollabiert (kein Datum) -> bleibt
+        "daily-index-2026.06.11": 3,            # Tages-Suffix wird ebenso gefaltet
+    }
+    out = rules._collapse_dated_indices(counts)
+    assert out["schach-bot-logs"] == 308
+    assert out["rookhub-logs-generic-default"] == 7000
+    assert out["daily-index"] == 3
+
+
+def test_index_silent_ignores_monthly_rollover():
+    # Realer schach-bot-Fall: Juni-Index verstummt am 1. Juli, Juli-Index lebt ->
+    # KEIN Alarm, weil beide zur selben Familie gehören.
+    c = _cfg()
+    cur = {"schach-bot-logs-2026.06": 0, "schach-bot-logs-2026.07": 17,
+           "rookhub-logs-2026.07": 7000}
+    base = {"schach-bot-logs-2026.06": 9, "schach-bot-logs-2026.07": 0,
+            "rookhub-logs-2026.06": 5000}
+    sigs = rules.evaluate_index_silence(cur, base, c, 24)
+    assert [s for s in sigs if s.kind == "index_silent"] == []
+
+
+def test_index_silent_fires_for_whole_monthly_family_outage():
+    # Eine ganze Monats-Familie verstummt (kein neuerer Monat), andere lebt -> Alarm.
+    c = _cfg()
+    cur = {"schach-bot-logs-2026.07": 0, "rookhub-logs-2026.07": 7000}
+    base = {"schach-bot-logs-2026.06": 50, "rookhub-logs-2026.06": 5000}
+    sigs = rules.evaluate_index_silence(cur, base, c, 24)
+    silent = [s for s in sigs if s.kind == "index_silent"]
+    assert len(silent) == 1
+    assert "schach-bot-logs" in silent[0].detail

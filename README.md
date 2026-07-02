@@ -48,7 +48,7 @@ False-Positives niedrig.
 | `fatal` | high | mind. ein `Fatal`/`Critical`-Eintrag |
 | `new_errors` | medium | per Fingerprint gruppierte Fehler, die *erstmalig* (nicht nur seit Vorfenster) auftreten |
 | `ingestion_stopped` | high | gesamt 0 Logs → Pipeline evtl. tot |
-| `index_silent` | high | ein Index verstummt, während andere weiterloggen (Teil-Ausfall) |
+| `index_silent` | high | ein Index verstummt, während andere weiterloggen (Teil-Ausfall). **Familien-bewusst**: Data-Stream-Backing-Indizes (`.ds-…-000001/-000002`) UND klassische datierte Indizes (`…-2026.06` monatlich / `…-2026.06.11` täglich) werden auf ihre Familie kollabiert — ein reiner Rollover (alte Index → 0, neue aktiv) löst also KEINEN Fehlalarm mehr aus; gemeldet wird der Familien-Name |
 | `heartbeat_missing` | high | ein Dienst hat in den letzten N min KEIN Lebenszeichen geschrieben (vermutlich tot/hängend) — pro Dienst, genauer als Index-Stille |
 | `suspicious_requests` | high | Aufrufe auf bekannte Scanner-/Exploit-Pfade (`.env`, `wp-login`, `phpMyAdmin`, `/.git`, Pfad-Traversal, `.php` gegen die .NET-API …), die mit 4xx/5xx enden — jemand klopft die API ab |
 | `api_scan` | high | eine einzelne Quell-IP erzeugt viele 4xx über viele **verschiedene** Pfade → Pfad-Enumeration/Fuzzing (legitime, wiederholte 404 auf wenige Endpunkte lösen dadurch NICHT aus) |
