@@ -60,8 +60,17 @@ targets:
     # Default messageTemplate.keyword) — ohne diese Zeile bleiben error_messages/Neu-
     # Signatur-Erkennung UND der warn_spike_ignore-Abgleich leer.
     message_field: labels.MessageTemplate
-    # piratechess loggt bei wackeligem VPN-Exit "curl exited with code …" als WARNUNG
-    # (softFail + Retry, kein Vorfall). Aus dem warn_spike-Count herausrechnen, damit
-    # solche Import-Episoden keinen Fehlalarm auslösen:
+    # By-design-WARN-Templates aus dem warn_spike-Count herausrechnen, damit sie keine
+    # Fehlalarme auslösen:
+    #   - "curl exited with code …": softFail + Retry bei wackeligem VPN-Exit während
+    #     Chessable-Imports (kein Vorfall).
+    #   - "WIEDERHOLT SCHLECHT": kumulativer Bad-Phase-Zähler pro VPN-IP, klettert bei
+    #     langen Importen zwangsläufig hoch, obwohl die Block-Rate niedrig bleibt.
+    #   - "übersprang eine Linie/Kapitel": Toleranz-Diagnose des Kurs-Reconstruct — abge-
+    #     schnittene/korrupte GECACHTE Kapitel-/Linien-JSONs werden übersprungen statt den
+    #     Export zu killen (1 WARN je Skip). Die Summenzeile ("mit N übersprungenen Linien/
+    #     Kapiteln") wird BEWUSST NICHT ignoriert, damit ein echter Skip-Ausschlag alarmiert.
     warn_spike_ignore:
       - "curl exited with code"
+      - "WIEDERHOLT SCHLECHT"
+      - "übersprang eine Linie/Kapitel"
