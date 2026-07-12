@@ -38,6 +38,9 @@ targets:
   - name: rookhub
     es_url: http://host.docker.internal:9200
     es_indices: [rookhub-logs-*, crawler-logs-*]
+    # Linux-System-Logs (Filebeat/journald von Host + VMs) mitüberwachen:
+    # SSH-Brute-Force, OOM-Kills, Disk-Fehler, Unit-Failures, verstummte Hosts.
+    linux_indices: [filebeat-*]
     alert_index_prefix: log-watcher-alerts
 
   # ── ES-Instanz B (anderer Host/Port, eigener API-Key) ───────────────────────

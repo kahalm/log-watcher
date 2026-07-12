@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from . import __version__
 from .config import Config, load_targets
 from .es_client import ESClient, ESError
-from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver, digest, discord_notify, security
+from . import rules, analyzer, notifier, state, health, alerts, scrub, httpserver, digest, discord_notify, security, linux
 from . import fingerprint as fp
 from .metrics import METRICS
 
@@ -148,6 +148,15 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         except ESError as e:
             log.warning("Security-Prüfung übersprungen: %s", e)
 
+    # Linux-System-Heuristik: SSH-Brute-Force, OOM, Disk-Fehler, Unit-Failures und
+    # verstummte Hosts über die Filebeat-/journald-Logs (eigene Indizes).
+    if cfg.linux_check and cfg.linux_indices:
+        try:
+            lin = es.linux_window(_iso(now - win), _iso(now), _iso(now - 2 * win))
+            signals += linux.evaluate_linux(lin, cfg)
+        except ESError as e:
+            log.warning("Linux-Prüfung übersprungen: %s", e)
+
     METRICS.add_signals([s.kind for s in signals])
 
     # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9).
@@ -191,7 +200,8 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
 
     # Bestätigte Security-Signale sind immer eine „große Warnung": der LLM darf einen
     # erkannten Scan/Brute-Force nicht zu „nicht auffällig" herabstufen.
-    security_signals = [s for s in signals if s.kind in security.SECURITY_KINDS]
+    security_signals = [s for s in signals
+                        if s.kind in security.SECURITY_KINDS or s.kind in linux.FORCED_KINDS]
     if security_signals:
         assessment["anomalous"] = True
         assessment["severity"] = "high"
@@ -319,6 +329,12 @@ def replay(cfg: Config, es: ESClient, start_dt: datetime, end_dt: datetime) -> i
                 signals += security.evaluate_security(es.security_window(_iso(cursor - win), _iso(cursor)), cfg)
             except ESError as e:
                 log.warning("REPLAY: Security-Prüfung übersprungen: %s", e)
+        if cfg.linux_check and cfg.linux_indices:
+            try:
+                signals += linux.evaluate_linux(
+                    es.linux_window(_iso(cursor - win), _iso(cursor), _iso(cursor - 2 * win)), cfg)
+            except ESError as e:
+                log.warning("REPLAY: Linux-Prüfung übersprungen: %s", e)
         if signals:
             fired += 1
             log.info("REPLAY %s: %s", _iso(cursor), " | ".join(f"{s.kind}: {s.detail}" for s in signals))

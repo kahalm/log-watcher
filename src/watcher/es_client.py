@@ -35,8 +35,8 @@ class ESClient:
             h["Authorization"] = f"Basic {token}"
         return h
 
-    def _search(self, body: dict) -> dict:
-        index = ",".join(self.cfg.es_indices)
+    def _search(self, body: dict, index: "str | None" = None) -> dict:
+        index = index or ",".join(self.cfg.es_indices)
         url = f"{self.cfg.es_url.rstrip('/')}/{index}/_search"
         try:
             r = requests.post(url, json=body, headers=self._headers(), timeout=30)
@@ -223,6 +223,71 @@ class ESClient:
                 "distinct_paths": int(b.get("distinct_paths", {}).get("value", 0)),
             }
         return {"total_requests": total_count, "suspicious": suspicious, "by_ip": by_ip}
+
+    def linux_window(self, start_iso: str, end_iso: str, baseline_start_iso: str) -> dict:
+        """Aggregiert die Linux-System-Logs (Filebeat/journald, ``linux_indices``)
+        für die Linux-Heuristik.
+
+        Liefert {hosts: {host: {total, ssh_fail, oom, disk, unit_fail}},
+        baseline_hosts: {host: total_docs_im_vorfenster}}. Bei 4xx (Feld nicht
+        aggregierbar / Index fehlt) leeres Ergebnis statt Zyklus-Abbruch;
+        Verbindungs-/Serverfehler werden weitergereicht.
+        """
+        from .linux import SSH_FAIL_PHRASES, OOM_PHRASES, DISK_PHRASES, UNIT_FAIL_PHRASES
+        cfg = self.cfg
+        index = ",".join(cfg.linux_indices)
+        host_f = cfg.linux_host_field
+
+        def phrase_filter(phrases):
+            return {"filter": {"bool": {
+                "should": [{"match_phrase": {cfg.linux_message_field: p}} for p in phrases],
+                "minimum_should_match": 1,
+            }}}
+
+        body = {
+            "size": 0, "track_total_hits": False,
+            "query": self._range(start_iso, end_iso),
+            "aggs": {"by_host": {
+                "terms": {"field": host_f, "size": max(1, cfg.linux_top_hosts)},
+                "aggs": {
+                    "ssh_fail": phrase_filter(SSH_FAIL_PHRASES),
+                    "oom": phrase_filter(OOM_PHRASES),
+                    "disk": phrase_filter(DISK_PHRASES),
+                    "unit_fail": phrase_filter(UNIT_FAIL_PHRASES),
+                },
+            }},
+        }
+        baseline_body = {
+            "size": 0, "track_total_hits": False,
+            "query": self._range(baseline_start_iso, start_iso),
+            "aggs": {"by_host": {"terms": {"field": host_f, "size": max(1, cfg.linux_top_hosts)}}},
+        }
+        try:
+            resp = self._search(body, index=index)
+            base = self._search(baseline_body, index=index)
+        except ESError as e:
+            if e.status is None or e.status >= 500:
+                raise
+            log.warning("linux_window reduziert (Index/Feld fehlt?): %s", e)
+            return {"hosts": {}, "baseline_hosts": {}}
+        return self._parse_linux(resp, base)
+
+    @staticmethod
+    def _parse_linux(resp: dict, base: dict) -> dict:
+        hosts = {}
+        for b in resp.get("aggregations", {}).get("by_host", {}).get("buckets", []):
+            hosts[str(b["key"])] = {
+                "total": b.get("doc_count", 0),
+                "ssh_fail": int(b.get("ssh_fail", {}).get("doc_count", 0)),
+                "oom": int(b.get("oom", {}).get("doc_count", 0)),
+                "disk": int(b.get("disk", {}).get("doc_count", 0)),
+                "unit_fail": int(b.get("unit_fail", {}).get("doc_count", 0)),
+            }
+        baseline_hosts = {
+            str(b["key"]): b.get("doc_count", 0)
+            for b in base.get("aggregations", {}).get("by_host", {}).get("buckets", [])
+        }
+        return {"hosts": hosts, "baseline_hosts": baseline_hosts}
 
     def ensure_alert_template(self, prefix: str) -> None:
         """Index-Template für die Alert-Indizes: replicas=0 (Single-Node bleibt green)."""

@@ -53,6 +53,11 @@ False-Positives niedrig.
 | `suspicious_requests` | high | Aufrufe auf bekannte Scanner-/Exploit-Pfade (`.env`, `wp-login`, `phpMyAdmin`, `/.git`, Pfad-Traversal, `.php` gegen die .NET-API …), die mit 4xx/5xx enden — jemand klopft die API ab |
 | `api_scan` | high | eine einzelne Quell-IP erzeugt viele 4xx über viele **verschiedene** Pfade → Pfad-Enumeration/Fuzzing (legitime, wiederholte 404 auf wenige Endpunkte lösen dadurch NICHT aus) |
 | `auth_bruteforce` | high | eine Quell-IP sammelt viele abgelehnte Auth-Antworten (401/403) → möglicher Brute-Force/Credential-Stuffing |
+| `linux_ssh_bruteforce` | high | viele fehlgeschlagene SSH-Logins („Failed password"/„Invalid user") auf einem Host (Filebeat-/journald-Logs, `LINUX_INDICES`) — wird wie die Security-Signale IMMER alarmiert |
+| `linux_oom` | high | der Kernel-OOM-Killer hat auf einem Host zugeschlagen |
+| `linux_disk_errors` | high | Disk-/Dateisystem-Fehler (I/O error, EXT4-/XFS-Korruption) auf einem Host |
+| `linux_unit_failures` | medium | auffällig viele systemd-Unit-Fehlschläge auf einem Host |
+| `linux_host_silent` | high | ein Host, der im Vorfenster System-Logs lieferte, ist komplett verstummt → Filebeat/VM/Host prüfen |
 
 Die drei **Security-Signale** sind „große Warnungen": Wird eines bestätigt, wird der Alarm
 immer als `HIGH` mit 🚨-Betreff gesendet — der LLM darf einen erkannten Scan nicht zu
@@ -97,6 +102,12 @@ Siehe `.env.example`. Wichtigste Werte:
 | `SECURITY_PATH_TOKENS` | (Default-Liste) | komma-getrennte Pfad-Substrings (case-insensitiv), die als verdächtig gelten; leer = eingebaute Liste |
 | `SECURITY_STATUS_FIELD` / `SECURITY_PATH_FIELD` / `SECURITY_IP_FIELD` | `http.response.status_code` / `url.path` / `labels.IpAddress` | Felder der Zugriffslogs (ECS/Serilog-Defaults) |
 | `SECURITY_TOP_IPS` | `20` | wie viele Quell-IPs je Fenster auf Enumeration/Brute-Force geprüft werden |
+| `LINUX_INDICES` | – (aus) | Index-Pattern der Filebeat-/journald-System-Logs (z.B. `filebeat-*`); leer = Linux-Heuristik aus |
+| `LINUX_SSH_FAIL_THRESHOLD` | `20` | ab so vielen fehlgeschlagenen SSH-Logins je Host → `linux_ssh_bruteforce` |
+| `LINUX_OOM_THRESHOLD` / `LINUX_DISK_ERROR_THRESHOLD` | `1` / `1` | OOM-/Disk-Fehler-Meldungen je Host, ab denen gewarnt wird |
+| `LINUX_UNIT_FAIL_THRESHOLD` | `10` | systemd-Unit-Fehlschlag-Meldungen je Host |
+| `LINUX_HOST_SILENT_CHECK` / `LINUX_HOST_SILENT_MIN_BASELINE` | `true` / `10` | verstummte Hosts melden (Vorfenster ≥ N Docs, aktuell 0) |
+| `LINUX_HOST_FIELD` / `LINUX_MESSAGE_FIELD` | `host.hostname` / `message` | Felder der Filebeat-Docs |
 | `ANTHROPIC_API_KEY` | – | optional; ohne → rein regelbasiert |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | günstiges Monitoring-Modell |
 | `SMTP_*` | – | Mailversand (Pflicht außer `DRY_RUN=true`) |

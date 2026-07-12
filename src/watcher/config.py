@@ -117,6 +117,28 @@ class Config:
     # Verdächtige Pfad-Substrings (case-insensitiv); leer = Default-Liste aus security.py.
     security_path_tokens: list = field(default_factory=lambda: _list("SECURITY_PATH_TOKENS", ""))
 
+    # --- Linux-System-Heuristik (Filebeat/journald-Logs von Host + VMs) ---
+    # Aktiv, sobald linux_indices gesetzt ist (z.B. [filebeat-*]). Feuert je Host bei
+    # SSH-Brute-Force, OOM-Kills, Disk-/FS-Fehlern, systemd-Unit-Fehlschlägen und
+    # verstummten Hosts (Filebeat/VM tot).
+    linux_check: bool = field(default_factory=lambda: _bool("LINUX_CHECK", True))
+    linux_indices: list = field(default_factory=lambda: _list("LINUX_INDICES", ""))
+    # Fehlgeschlagene SSH-Logins je Host im Fenster, ab denen gewarnt wird.
+    linux_ssh_fail_threshold: int = field(default_factory=lambda: _int("LINUX_SSH_FAIL_THRESHOLD", 20))
+    # OOM-Kill- bzw. Disk-Fehler-Meldungen je Host: schon 1 ist meldenswert.
+    linux_oom_threshold: int = field(default_factory=lambda: _int("LINUX_OOM_THRESHOLD", 1))
+    linux_disk_error_threshold: int = field(default_factory=lambda: _int("LINUX_DISK_ERROR_THRESHOLD", 1))
+    # systemd-Unit-Fehlschlag-Meldungen je Host (Restart-Schleifen erzeugen viele).
+    linux_unit_fail_threshold: int = field(default_factory=lambda: _int("LINUX_UNIT_FAIL_THRESHOLD", 10))
+    # Verstummte Hosts melden (im Vorfenster >= min_baseline Docs, aktuell 0).
+    linux_host_silent_check: bool = field(default_factory=lambda: _bool("LINUX_HOST_SILENT_CHECK", True))
+    linux_host_silent_min_baseline: int = field(default_factory=lambda: _int("LINUX_HOST_SILENT_MIN_BASELINE", 10))
+    # Felder der Filebeat-Docs.
+    linux_host_field: str = field(default_factory=lambda: _str("LINUX_HOST_FIELD", "host.hostname"))
+    linux_message_field: str = field(default_factory=lambda: _str("LINUX_MESSAGE_FIELD", "message"))
+    # Wie viele Hosts (Top nach Log-Volumen) je Fenster geprüft werden.
+    linux_top_hosts: int = field(default_factory=lambda: _int("LINUX_TOP_HOSTS", 50))
+
     # --- LLM (Anthropic) ---
     anthropic_api_key: "str | None" = field(default_factory=lambda: _str("ANTHROPIC_API_KEY"))
     model: str = field(default_factory=lambda: _str("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"))
