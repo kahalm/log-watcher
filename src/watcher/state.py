@@ -8,7 +8,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
+
+# Freistehende Zahlen (Zähler, Schwellen, Minuten) in den Signal-Details. Die Lookarounds
+# schützen Zahlen, die Teil eines Namens sind: Host "vm2"/"vm-01", Index "logs-2", IP
+# "45.9.1.2" — sonst bekämen zwei verschiedene Hosts/Indizes/Angreifer dieselbe Signatur und
+# würden einander wegdedupen (12h-Cooldown + gecachtes Verdict). Ein blosses \b reicht dafür
+# NICHT: '-' und '.' sind Nicht-Wortzeichen, "logs-2" würde damit zu "logs-<n>".
+_VOLATILE_NUM = re.compile(r"(?<![\w.-])\d+(?![\w.-])")
 
 _SEEN_RETENTION = 180 * 86400
 _VERDICT_RETENTION = 7 * 86400
@@ -16,8 +24,16 @@ _ALERT_RETENTION = 30 * 86400
 
 
 def signature(signals) -> str:
-    """Stabile Signatur über Art + Detail der Signale."""
-    parts = sorted(f"{s.kind}:{s.detail}" for s in signals)
+    """Stabile Signatur über Art + NORMALISIERTES Detail der Signale.
+
+    Die Details tragen die Zähler des Fensters ("30 Fehler … Vorfenster: 4"). Roh gehasht
+    ergäbe ein anhaltender Vorfall pro Zyklus eine neue Signatur — Cooldown und
+    Verdict-Cache liefen ins Leere (jedes Mal neuer LLM-Call + neuer Alert). Nur die
+    Zähler werden ersetzt, NICHT (wie bei fingerprint()) auch Namen in Anführungszeichen:
+    'rookhub-api' und 'schach-bot' müssen unterscheidbare Signaturen behalten. Die
+    Roh-Details in Mail/Discord bleiben unverändert.
+    """
+    parts = sorted(f"{s.kind}:{_VOLATILE_NUM.sub('<n>', str(s.detail))}" for s in signals)
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 

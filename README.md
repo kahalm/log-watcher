@@ -99,6 +99,7 @@ Siehe `.env.example`. Wichtigste Werte:
 | `SECURITY_MIN_SUSPICIOUS` | `3` | ab so vielen Treffern auf verdächtige Pfade (4xx/5xx) → `suspicious_requests` |
 | `SECURITY_SCAN_MIN_4XX` / `SECURITY_SCAN_MIN_PATHS` | `40` / `15` | `api_scan`: ab so vielen 4xx **und** so vielen verschiedenen Pfaden je Quell-IP |
 | `SECURITY_AUTH_FAIL_THRESHOLD` | `25` | ab so vielen 401/403 je Quell-IP → `auth_bruteforce` |
+| `SECURITY_AUTH_PATH_PREFIX` | `/api/auth` | zählt nur 401/403 auf diesem Pfad-Präfix (ein abgelaufenes Token auf normalen API-Pfaden ist kein Brute-Force); `/` = jeder Pfad |
 | `SECURITY_PATH_TOKENS` | (Default-Liste) | komma-getrennte Pfad-Substrings (case-insensitiv), die als verdächtig gelten; leer = eingebaute Liste |
 | `SECURITY_STATUS_FIELD` / `SECURITY_PATH_FIELD` / `SECURITY_IP_FIELD` | `http.response.status_code` / `url.path` / `labels.IpAddress` | Felder der Zugriffslogs (ECS/Serilog-Defaults) |
 | `SECURITY_TOP_IPS` | `20` | wie viele Quell-IPs je Fenster auf Enumeration/Brute-Force geprüft werden |
@@ -111,7 +112,7 @@ Siehe `.env.example`. Wichtigste Werte:
 | `ANTHROPIC_API_KEY` | – | optional; ohne → rein regelbasiert |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | günstiges Monitoring-Modell |
 | `SMTP_*` | – | Mailversand (Pflicht außer `DRY_RUN=true`) |
-| `COOLDOWN_HOURS` | `12` | gleiche Auffälligkeit nicht öfter melden |
+| `COOLDOWN_HOURS` | `12` | gleiche Auffälligkeit nicht öfter melden (Signatur über die Signal-Details **ohne** die Fenster-Zähler; der Cooldown wird erst gestempelt, wenn mindestens ein Kanal die Zustellung geschafft hat) |
 | `DRY_RUN` | `false` | keine Mail, nur loggen (zum Einrichten) |
 | `SELFTEST` | `false` | einmaliger Konfig-Check (Probe + Trockenlauf), dann beenden |
 | `NOTIFY_ON_START` | `false` | einmalige „gestartet"-Mail (Verkabelung testen) |
@@ -172,7 +173,9 @@ für lokal die `build:`-Zeile einkommentieren). **Tag-gated wie die übrigen Rep
 - **Per-Index-Stille (10)** und **saisonale Baseline (7):** `BASELINE_MODE=previous|yesterday|last_week`.
 - **LLM-Budget (11)** `LLM_MAX_CALLS_PER_DAY` + **Verdict-Cache (12)** `LLM_VERDICT_TTL_HOURS` → spart Calls.
 - **Sample-Logs (14):** einige *redigierte* Beispielzeilen gehen an den LLM für die Ursachenanalyse.
-- **PII-Scrubbing (19):** `SCRUB_PII` entfernt E-Mails/IPs/Tokens vor LLM/Mail/ES.
+- **PII-Scrubbing (19):** `SCRUB_PII` entfernt E-Mails/IPv4+IPv6/Tokens vor LLM/Mail/ES — auch aus den
+  Signal-Details (Security-Alarme zeigen dann `<ip>` statt der Quell-IP; wer die IP im Alarm braucht,
+  setzt `SCRUB_PII=false`).
 - **HTTP (15/16):** `HTTP_PORT>0` → `/healthz`, `/status` (JSON), `/metrics` (Prometheus).
 - **Multi-Target (17):** `CONFIG_FILE=…yaml` überwacht mehrere Index-Gruppen **und mehrere
   Elasticsearch-Instanzen** aus EINEM Container — jedes Target hat eigenes `es_url` (+ `es_api_key`

@@ -8,7 +8,9 @@ und feuert deterministische Signale, wenn jemand die API scannt/probt:
 - api_scan            : eine einzelne Quell-IP erzeugt viele 4xx über viele VERSCHIEDENE
                         Pfade -> Pfad-Enumeration/Fuzzing (legitime, wiederholte 404 auf
                         wenige Pfade — z.B. Bot-Endpoints — fallen dadurch NICHT auf).
-- auth_bruteforce     : eine Quell-IP sammelt viele abgelehnte Auth-Antworten (401/403).
+- auth_bruteforce     : eine Quell-IP sammelt viele abgelehnte Auth-Antworten (401/403) auf
+                        den AUTH-Endpunkten (SECURITY_AUTH_PATH_PREFIX). 401 auf normalen
+                        Pfaden ist meist nur ein abgelaufenes Token und zählt nicht mit.
 
 Alle drei sind „große Warnungen" (severity high). Die eigentlichen Schwellen/Felder/Tokens
 sind über die Config (ENV) einstellbar; die Defaults sind bewusst konservativ, damit
@@ -68,10 +70,16 @@ def evaluate_security(sec: dict, cfg) -> "list[Signal]":
 
     # 2)/3) Pro Quell-IP: Enumeration (viele 4xx über viele Pfade) und Auth-Brute-Force.
     by_ip = sec.get("by_ip") or {}
+    prefix = getattr(cfg, "security_auth_path_prefix", "") or ""
     for ip, st in sorted(by_ip.items(), key=lambda kv: kv[1].get("c4xx", 0), reverse=True):
         c4xx = int(st.get("c4xx", 0))
         paths = int(st.get("distinct_paths", 0))
-        auth = int(st.get("auth_fail", 0))
+        # Nur die auf die Auth-Endpunkte eingeschränkten Ablehnungen zählen — 401 auf
+        # normalen API-Pfaden ist typischerweise ein legitimer Client mit abgelaufenem
+        # Token (60s-Poll reißt jede Schwelle) und kein Angriff. Fehlt der gescopte
+        # Zähler (alte/fremde Aggregation), wird wie bisher der Gesamtzähler benutzt.
+        auth = int(st.get("auth_fail_scoped", st.get("auth_fail", 0)))
+        scope = f" auf {prefix}*" if prefix and "auth_fail_scoped" in st else ""
         if c4xx >= cfg.security_scan_min_4xx and paths >= cfg.security_scan_min_paths:
             signals.append(Signal(
                 "api_scan", "high",
@@ -80,7 +88,7 @@ def evaluate_security(sec: dict, cfg) -> "list[Signal]":
         if auth >= cfg.security_auth_fail_threshold:
             signals.append(Signal(
                 "auth_bruteforce", "high",
-                f"IP {ip}: {auth} abgelehnte Auth-Antworten (401/403) im {win:g}h-Fenster "
+                f"IP {ip}: {auth} abgelehnte Auth-Antworten (401/403){scope} im {win:g}h-Fenster "
                 f"— möglicher Brute-Force/Credential-Stuffing."))
 
     return signals

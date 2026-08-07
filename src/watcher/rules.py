@@ -5,10 +5,18 @@ Das hält die Kosten niedrig und reduziert False Positives.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
 from .fingerprint import fingerprint
+from .scrub import scrub
+
+log = logging.getLogger("log-watcher")
+
+# Terms-Größe von es_client.aggregate_window (errors.top_messages) — bei genau so vielen
+# Templates ist die Aggregation am Anschlag und der Ignore-Abzug potenziell unvollständig.
+_TOP_MESSAGES_SIZE = 15
 
 # Backing-Index eines Data-Streams: ".ds-<stream>-<yyyy.MM.dd>-<NNNNNN>".
 # Beim Rollover wird das vorherige Backing stumm, der Stream als Ganzes lebt aber
@@ -62,8 +70,16 @@ def _count_levels(levels: dict, names) -> int:
 
 
 def _ignore_patterns(cfg) -> "list[str]":
-    """`warn_spike_ignore` als kleingeschriebene Teilstring-Liste (oder leer)."""
-    return [p.lower() for p in (getattr(cfg, "warn_spike_ignore", None) or [])]
+    """`warn_spike_ignore` als kleingeschriebene Teilstring-Liste (oder leer).
+
+    Die Muster werden bei aktivem SCRUB_PII genauso redigiert wie die Templates, gegen die
+    sie matchen — sonst greift ein Muster mit IP/E-Mail/langem Token nie, weil im Template
+    an der Stelle schon `<ip>`/`<email>`/`<token>` steht.
+    """
+    pats = [str(p) for p in (getattr(cfg, "warn_spike_ignore", None) or [])]
+    if getattr(cfg, "scrub_pii", False):
+        pats = [scrub(p) for p in pats]
+    return [p.lower() for p in pats]
 
 
 def _is_ignored(msg: str, pats: "list[str]") -> bool:
@@ -86,6 +102,36 @@ def _ignored_warn_count(window: dict, cfg) -> int:
     return sum(cnt for msg, cnt in window.get("error_messages", {}).items() if _is_ignored(msg, pats))
 
 
+# Bereits gewarnte (Target, Grund)-Kombinationen — die Warnung soll nicht in jedem Zyklus
+# im Log stehen, aber pro Target genau einmal erscheinen.
+_ignore_degraded_warned: set = set()
+
+
+def _warn_if_ignore_degraded(window: dict, cfg, pats: "list[str]") -> None:
+    """Warnt, wenn der `warn_spike_ignore`-Abzug faktisch außer Kraft ist.
+
+    Der Abzug rechnet aus der Top-N-Terms-Aggregation. Fehlt sie (Fallback-Leiter von
+    aggregate_window, message_field nicht aggregierbar) oder ist sie am Limit, wird zu wenig
+    abgezogen und der unterdrückte warn_spike-Fehlalarm kommt zurück — das darf nicht
+    stumm passieren, sonst sucht man den Fehler beim Rauschen statt bei der Aggregation.
+    """
+    if not pats:
+        return
+    msgs = window.get("error_messages") or {}
+    if not msgs:
+        reason = "keine Message-Templates in der Aggregation (ES_MESSAGE_FIELD nicht aggregierbar?)"
+    elif len(msgs) >= _TOP_MESSAGES_SIZE:
+        reason = (f"Template-Aggregation am Limit ({len(msgs)}) — das Rausch-Template kann "
+                  f"aus den Top-{_TOP_MESSAGES_SIZE} gefallen sein")
+    else:
+        return
+    key = (getattr(cfg, "name", "default"), reason)
+    if key in _ignore_degraded_warned:
+        return
+    _ignore_degraded_warned.add(key)
+    log.warning("WARN_SPIKE_IGNORE greift evtl. nicht [%s]: %s.", key[0], reason)
+
+
 def evaluate(current: dict, baseline: dict, cfg, known_fingerprints=None) -> "list[Signal]":
     signals: list[Signal] = []
     cur_err = _count_levels(current["levels"], cfg.error_levels)
@@ -102,6 +148,8 @@ def evaluate(current: dict, baseline: dict, cfg, known_fingerprints=None) -> "li
         cur_warn = _count_levels(current["levels"], cfg.warn_levels)
         base_warn = _count_levels(baseline["levels"], cfg.warn_levels)
         # by-design-Rauschen (z.B. softFail-Retries) vor der Schwellenprüfung abziehen.
+        if cur_warn > 0:
+            _warn_if_ignore_degraded(current, cfg, _ignore_patterns(cfg))
         ignored_cur = _ignored_warn_count(current, cfg)
         ignored_base = _ignored_warn_count(baseline, cfg)
         cur_warn = max(0, cur_warn - ignored_cur)

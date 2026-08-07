@@ -11,9 +11,44 @@ class _S:
 def test_signature_stable_and_distinct():
     a = [_S("error_spike", "30 Fehler")]
     b = [_S("error_spike", "30 Fehler")]
-    c = [_S("error_spike", "99 Fehler")]
+    c = [_S("warn_spike", "30 Fehler")]
     assert state.signature(a) == state.signature(b)
-    assert state.signature(a) != state.signature(c)
+    assert state.signature(a) != state.signature(c)  # andere Art -> andere Signatur
+
+
+def test_signature_ignores_volatile_counts():
+    # Derselbe anhaltende Vorfall darf pro Zyklus KEINE neue Signatur bekommen, sonst
+    # greifen Cooldown und Verdict-Cache nie.
+    a = [_S("error_spike", "30 Fehler im Fenster (Vorfenster: 4, Schwelle Faktor 3.0).")]
+    b = [_S("error_spike", "99 Fehler im Fenster (Vorfenster: 7, Schwelle Faktor 3.0).")]
+    assert state.signature(a) == state.signature(b)
+
+
+def test_signature_keeps_names_distinct():
+    # Namen (Dienst/Index/Host) müssen unterscheidbar bleiben — sonst dedupt ein toter
+    # Dienst den nächsten weg.
+    a = [_S("heartbeat_missing", "Kein Heartbeat von 'rookhub-api' in den letzten 5 min")]
+    b = [_S("heartbeat_missing", "Kein Heartbeat von 'schach-bot' in den letzten 5 min")]
+    c = [_S("index_silent", "Index 'vm1-logs': 0 Logs")]
+    d = [_S("index_silent", "Index 'vm2-logs': 0 Logs")]
+    # Bindestrich-/Punkt-Namen: '\b' allein hätte "vm-01"/"vm-02" und "logs-2"/"logs-3"
+    # zusammenfallen lassen — genau die Hosts/Indizes, die unterscheidbar bleiben müssen.
+    e = [_S("linux_host_silent", "Host 'vm-01' meldet nichts mehr")]
+    f = [_S("linux_host_silent", "Host 'vm-02' meldet nichts mehr")]
+    g = [_S("index_silent", "Index 'logs-2': 0 Logs")]
+    h = [_S("index_silent", "Index 'logs-3': 0 Logs")]
+    # Verschiedene Angreifer-IPs dürfen sich NICHT wegdedupen (sonst erbt der zweite den
+    # 12h-Cooldown und das gecachte Verdict des ersten).
+    i = [_S("api_scan", "IP 45.9.1.2: 300 4xx über 40 Pfade")]
+    j = [_S("api_scan", "IP 203.0.113.7: 512 4xx über 61 Pfade")]
+    assert state.signature(a) != state.signature(b)
+    assert state.signature(c) != state.signature(d)
+    assert state.signature(e) != state.signature(f)
+    assert state.signature(g) != state.signature(h)
+    assert state.signature(i) != state.signature(j)
+    # Reine Zähler-Schwankungen desselben Vorfalls bleiben EINE Signatur (Cooldown greift).
+    k = [_S("api_scan", "IP 45.9.1.2: 411 4xx über 52 Pfade")]
+    assert state.signature(i) == state.signature(k)
 
 
 def test_cooldown_window():

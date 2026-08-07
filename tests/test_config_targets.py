@@ -65,3 +65,25 @@ def test_unknown_key_ignored(tmp_path, monkeypatch):
     monkeypatch.setenv("CONFIG_FILE", str(p))
     targets = load_targets()
     assert targets[0].name == "x"  # unbekannter Key ignoriert, kein Crash
+
+
+def test_string_for_list_field_is_split_not_iterated_charwise(tmp_path, monkeypatch):
+    p = tmp_path / "c.yaml"
+    p.write_text('targets:\n  - name: x\n    warn_spike_ignore: "curl exited, softFail"\n'
+                 '    es_indices: "a-*,b-*"\n')
+    monkeypatch.setenv("CONFIG_FILE", str(p))
+    t = load_targets()[0]
+    # Ohne Koersion würde über die EINZELZEICHEN iteriert -> warn_spike/new_errors still tot.
+    assert t.warn_spike_ignore == ["curl exited", "softFail"]
+    assert t.es_indices == ["a-*", "b-*"]
+    assert t.validate() == [] or "Liste" not in " ".join(t.validate())
+
+
+def test_non_coercible_type_for_list_field_is_config_error(tmp_path, monkeypatch):
+    p = tmp_path / "c.yaml"
+    p.write_text("targets:\n  - name: x\n    es_indices: 42\n")
+    monkeypatch.setenv("CONFIG_FILE", str(p))
+    t = load_targets()[0]
+    errs = t.validate()
+    assert any("es_indices" in e and "Liste" in e for e in errs)
+    assert t.es_indices != 42  # Wert wurde NICHT gesetzt

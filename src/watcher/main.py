@@ -157,6 +157,17 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         except ESError as e:
             log.warning("Linux-Prüfung übersprungen: %s", e)
 
+    # Signatur aus den ROHEN Details bilden — VOR dem Redigieren. Sonst kollabieren
+    # verschiedene Angreifer-IPs auf dieselbe Signatur (beide werden zu "<ip>") und der
+    # zweite Angreifer läuft still in den 12h-Cooldown des ersten, inklusive dessen
+    # gecachtem LLM-Verdict.
+    raw_signature = state.signature(signals)
+
+    # Signal-Details erst hier redigieren — danach geht nichts mehr an LLM/Mail/Discord/ES
+    # vorbei. Ohne das gingen die Roh-Client-IPs aus security.py trotz SCRUB_PII=true raus.
+    if cfg.scrub_pii:
+        scrub.scrub_signals(signals)
+
     METRICS.add_signals([s.kind for s in signals])
 
     # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9).
@@ -168,7 +179,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         return
 
     log.info("Regel-Gate ausgelöst: %s", [s.kind for s in signals])
-    sig = state.signature(signals)
+    sig = raw_signature
     if state.in_cooldown(st, cfg.name, sig, cfg.cooldown_hours * 3600, now_ts):
         state.save_state(cfg.state_file, st)
         METRICS.inc("suppressed_total")
@@ -228,13 +239,16 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     html_body = notifier.build_email_html(assessment, signals, current, baseline, cfg)
 
     emailed = False
+    delivered = False
     if cfg.dry_run:
         log.warning("DRY_RUN: würde alarmieren:\n--- %s ---\n%s", subject, text_body)
+        delivered = True  # im Trockenlauf soll der Cooldown wie im Echtbetrieb greifen
     else:
         if cfg.smtp_host:
             try:
                 notifier.send_email(cfg, subject, text_body, html_body)
                 emailed = True
+                delivered = True
                 log.info("E-Mail (HTML+Text) gesendet an %s", cfg.smtp_to)
             except Exception as e:  # noqa: BLE001 — Kanal-Fehler darf Indizierung/State nicht verhindern
                 log.error("E-Mail-Versand fehlgeschlagen: %s", e)
@@ -242,6 +256,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             try:
                 discord_notify.post(cfg.discord_webhook_url,
                                     discord_notify.build_alert_payload(subject, assessment, signals, current, baseline, cfg))
+                delivered = True
                 log.info("Discord-Alert gesendet.")
             except Exception as e:  # noqa: BLE001
                 log.error("Discord-Versand fehlgeschlagen: %s", e)
@@ -258,7 +273,14 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
                 log.warning("Alert-Indizierung fehlgeschlagen: %s", e)
 
     METRICS.inc("alerts_total")
-    state.save_state(cfg.state_file, state.record_alert(st, cfg.name, sig, now_ts))
+    # Cooldown nur stempeln, wenn wirklich jemand benachrichtigt wurde. Sonst würde ein
+    # transienter SMTP-/Webhook-Ausfall den Alarm für COOLDOWN_HOURS still verschlucken —
+    # bei stabilem Detail (heartbeat_missing) auch in allen Folgezyklen.
+    if delivered:
+        state.record_alert(st, cfg.name, sig, now_ts)
+    else:
+        log.error("Kein Alert-Kanal erfolgreich — Cooldown NICHT gesetzt, nächster Zyklus versucht es erneut.")
+    state.save_state(cfg.state_file, st)
 
 
 def startup_probe(cfg: Config, es: ESClient, now: datetime) -> None:
@@ -337,6 +359,8 @@ def replay(cfg: Config, es: ESClient, start_dt: datetime, end_dt: datetime) -> i
                 log.warning("REPLAY: Linux-Prüfung übersprungen: %s", e)
         if signals:
             fired += 1
+            if cfg.scrub_pii:
+                scrub.scrub_signals(signals)  # Replay-Log landet selbst wieder in ES/stdout
             log.info("REPLAY %s: %s", _iso(cursor), " | ".join(f"{s.kind}: {s.detail}" for s in signals))
         cursor += win
     log.info("REPLAY [%s] fertig: %d Fenster mit Signalen.", cfg.name, fired)
@@ -356,24 +380,39 @@ def _maybe_digest(glob: Config, clients, st: dict, now: datetime) -> None:
             pass
     if now.hour < glob.digest_hour:
         return
-    summaries = [digest.target_summary(cfg, es, glob.digest_period_days * 86400, now, _iso)
-                 for cfg, es in clients]
+    try:
+        summaries = [digest.target_summary(cfg, es, glob.digest_period_days * 86400, now, _iso)
+                     for cfg, es in clients]
+    except ESError as e:
+        # Marker bleibt stehen -> nächster Zyklus versucht es erneut, statt einen Digest
+        # mit stillen 0-Werten zu verschicken. All-is-well soll davon unberührt bleiben.
+        log.warning("Digest übersprungen (ES-Fehler): %s", e)
+        return
     subject, text_body, html_body = digest.build(summaries, glob.digest_period_days)
+    delivered = False
     if glob.dry_run:
         log.warning("DRY_RUN: würde Digest senden:\n--- %s ---\n%s", subject, text_body)
+        delivered = True
     else:
         if glob.smtp_host:
             try:
                 notifier.send_email(glob, subject, text_body, html_body)
+                delivered = True
                 log.info("Digest-Mail gesendet an %s", glob.smtp_to)
             except Exception as e:  # noqa: BLE001
                 log.error("Digest-Mail fehlgeschlagen: %s", e)
         if glob.discord_webhook_url:
             try:
                 discord_notify.post_text(glob.discord_webhook_url, f"**{subject}**\n```\n{text_body[:1800]}\n```")
+                delivered = True
                 log.info("Digest an Discord gesendet.")
             except Exception as e:  # noqa: BLE001
                 log.error("Digest-Discord fehlgeschlagen: %s", e)
+    # Periodenmarker nur bei erfolgreichem Versand fortschreiben — sonst fällt der Digest
+    # wegen eines kurzen Kanal-Ausfalls für die ganze Periode aus.
+    if not delivered:
+        log.error("Digest an keinen Kanal zugestellt — Marker nicht gesetzt, nächster Zyklus versucht es erneut.")
+        return
     st["last_digest"] = now.date().isoformat()
     state.save_state(glob.state_file, st)
 

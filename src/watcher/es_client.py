@@ -117,7 +117,13 @@ class ESClient:
         return out
 
     def count(self, index: str, query: dict) -> int:
-        """_count gegen ein (ggf. nicht existierendes) Index-Pattern. 0 bei Fehler/leer."""
+        """_count gegen ein (ggf. nicht existierendes) Index-Pattern.
+
+        0 nur bei 404 (Index/Pattern existiert nicht) oder wirklich leerem Ergebnis.
+        Verbindungs-/HTTP-Fehler werden als ESError geworfen: ein stilles 0 liest die
+        Heartbeat-Prüfung als „kein Lebenszeichen" und meldet bei einem einzigen
+        ES-Timeout ALLE Dienste gleichzeitig als tot.
+        """
         url = f"{self.cfg.es_url.rstrip('/')}/{index}/_count"
         try:
             r = requests.post(url, json={"query": query}, headers=self._headers(), timeout=15)
@@ -125,8 +131,13 @@ class ESClient:
                 return 0
             r.raise_for_status()
             return int(r.json().get("count", 0))
-        except (requests.RequestException, ValueError):
-            return 0
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            raise ESError(f"ES _count HTTP {status} für '{index}'", status=status) from e
+        except requests.RequestException as e:
+            raise ESError(f"ES _count nicht erreichbar: {e}", status=None) from e
+        except ValueError as e:
+            raise ESError(f"ES _count: unlesbare Antwort: {e}") from e
 
     def per_index_counts(self, start_iso: str, end_iso: str) -> dict:
         """Nur Doc-Counts je Index für ein Fenster (leichtgewichtig, für die Index-Stille-Prüfung).
@@ -165,12 +176,21 @@ class ESClient:
         suspicious_should = [
             {"wildcard": {path_f: {"value": f"*{t}*", "case_insensitive": True}}} for t in tokens
         ]
+        # Abgelehnte Auth-Antworten zusätzlich auf die Auth-Endpunkte einschränken: 401 auf
+        # normalen API-Pfaden ist meist nur ein abgelaufenes Token eines legitimen Clients.
+        auth_scoped = {"terms": {status_f: [401, 403]}}
+        if getattr(cfg, "security_auth_path_prefix", ""):
+            auth_scoped = {"bool": {"must": [
+                auth_scoped,
+                {"prefix": {path_f: {"value": cfg.security_auth_path_prefix, "case_insensitive": True}}},
+            ]}}
         aggs = {
             "by_ip": {
                 "terms": {"field": ip_f, "size": max(1, cfg.security_top_ips)},
                 "aggs": {
                     "c4xx": {"filter": {"range": {status_f: {"gte": 400, "lt": 500}}}},
                     "auth_fail": {"filter": {"terms": {status_f: [401, 403]}}},
+                    "auth_fail_scoped": {"filter": auth_scoped},
                     "distinct_paths": {"cardinality": {"field": path_f}},
                 },
             },
@@ -216,12 +236,18 @@ class ESClient:
         }
         by_ip = {}
         for b in aggs.get("by_ip", {}).get("buckets", []):
-            by_ip[str(b["key"])] = {
+            auth_fail = int(b.get("auth_fail", {}).get("doc_count", 0))
+            entry = {
                 "total": b.get("doc_count", 0),
                 "c4xx": int(b.get("c4xx", {}).get("doc_count", 0)),
-                "auth_fail": int(b.get("auth_fail", {}).get("doc_count", 0)),
+                "auth_fail": auth_fail,
                 "distinct_paths": int(b.get("distinct_paths", {}).get("value", 0)),
             }
+            # Nur setzen, wenn die Aggregation wirklich da war — fehlt der Schlüssel, fällt
+            # security.py bewusst auf den ungescopten Zähler zurück (kein stilles 0).
+            if "auth_fail_scoped" in b:
+                entry["auth_fail_scoped"] = int(b["auth_fail_scoped"].get("doc_count", 0))
+            by_ip[str(b["key"])] = entry
         return {"total_requests": total_count, "suspicious": suspicious, "by_ip": by_ip}
 
     def linux_window(self, start_iso: str, end_iso: str, baseline_start_iso: str) -> dict:

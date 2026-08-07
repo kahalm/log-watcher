@@ -29,3 +29,27 @@ def test_scrub_messages_sums_on_collision():
 
 def test_scrub_keeps_plain_text():
     assert scrub.scrub("database connection refused") == "database connection refused"
+
+
+def test_redacts_ipv6():
+    s = scrub.scrub("client 2001:0db8:85a3:0000:0000:8a2e:0370:7334 blocked")
+    assert "2001" not in s and "<ip>" in s
+    assert "<ip>" in scrub.scrub("from ::1")
+    assert "<ip>" in scrub.scrub("link-local fe80::1%eth0")
+    assert "<ip>" in scrub.scrub("peer 2a02:8109::42:1 timed out")
+
+
+def test_ipv6_pattern_keeps_timestamps_and_macs():
+    # Uhrzeiten/MACs dürfen nicht als IPv6 durchgehen — sonst wird jede Logzeile unlesbar.
+    assert scrub.scrub("2026-06-01T12:34:56.000Z ok") == "2026-06-01T12:34:56.000Z ok"
+    assert scrub.scrub("mac aa:bb:cc:dd:ee:ff") == "mac aa:bb:cc:dd:ee:ff"
+
+
+def test_scrub_signals_redacts_details():
+    class _S:
+        kind = "auth_bruteforce"
+        severity_hint = "high"
+        detail = "IP 45.9.1.2: 30 abgelehnte Auth-Antworten"
+
+    sigs = scrub.scrub_signals([_S()])
+    assert "45.9.1.2" not in sigs[0].detail and "<ip>" in sigs[0].detail

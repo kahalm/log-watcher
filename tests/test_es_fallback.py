@@ -1,4 +1,5 @@
 from watcher.config import Config
+from watcher import es_client
 from watcher.es_client import ESClient, ESError
 
 
@@ -66,3 +67,41 @@ def test_server_error_is_not_swallowed():
         assert False, "ESError erwartet"
     except ESError as e:
         assert e.status == 503
+
+
+# ── count(): Verbindungsfehler dürfen nicht als "0 Heartbeats" durchgehen ──
+
+class _Resp:
+    def __init__(self, status=200, payload=None):
+        self.status_code = status
+        self._payload = payload or {"count": 5}
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def test_count_returns_value(monkeypatch):
+    monkeypatch.setattr(es_client.requests, "post", lambda *a, **k: _Resp())
+    assert _client().count("idx-*", {"match_all": {}}) == 5
+
+
+def test_count_missing_index_is_zero(monkeypatch):
+    monkeypatch.setattr(es_client.requests, "post", lambda *a, **k: _Resp(status=404))
+    assert _client().count("nope-*", {"match_all": {}}) == 0
+
+
+def test_count_connection_error_raises(monkeypatch):
+    import requests
+
+    def boom(*a, **k):
+        raise requests.ConnectionError("timeout")
+
+    monkeypatch.setattr(es_client.requests, "post", boom)
+    try:
+        _client().count("idx-*", {"match_all": {}})
+        assert False, "ESError erwartet — sonst meldet die Heartbeat-Prüfung alle Dienste als tot"
+    except ESError as e:
+        assert e.status is None

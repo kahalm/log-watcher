@@ -304,3 +304,30 @@ def test_index_silent_fires_for_whole_monthly_family_outage():
     silent = [s for s in sigs if s.kind == "index_silent"]
     assert len(silent) == 1
     assert "schach-bot-logs" in silent[0].detail
+
+
+def test_ignore_pattern_is_scrub_normalized():
+    # main.py redigiert die Templates VOR rules.evaluate — ein Ignore-Muster mit IP/E-Mail
+    # würde sonst nie greifen, weil im Template schon <ip> steht.
+    c = _cfg()
+    c.scrub_pii = True
+    c.warn_spike_ignore = ["curl exited on 10.24.13.6"]
+    current = {"total": 5000, "levels": {"Warning": 47},
+               "error_messages": {"curl exited on <ip>": 44, "echtes problem": 3}}
+    baseline = {"total": 5000, "levels": {"Warning": 1}, "error_messages": {}}
+    assert "warn_spike" not in [s.kind for s in rules.evaluate(current, baseline, c)]
+
+
+def test_warns_once_when_ignore_subtraction_is_impossible(caplog):
+    # Ohne Message-Aggregation (Fallback-Leiter) wird still 0 abgezogen -> der unterdrückte
+    # Fehlalarm ist zurück. Das muss im Log stehen, aber nicht in jedem Zyklus.
+    c = _cfg()
+    c.name = "ignore-degraded-test"
+    c.warn_spike_ignore = ["curl exited with code"]
+    current = {"total": 5000, "levels": {"Warning": 60}, "error_messages": {}}
+    baseline = {"total": 5000, "levels": {"Warning": 55}, "error_messages": {}}
+    with caplog.at_level("WARNING"):
+        rules.evaluate(current, baseline, c)
+        rules.evaluate(current, baseline, c)
+    hits = [r for r in caplog.records if "WARN_SPIKE_IGNORE" in r.getMessage()]
+    assert len(hits) == 1

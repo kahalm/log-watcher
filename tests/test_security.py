@@ -103,3 +103,48 @@ def test_parse_security_empty():
     assert out == {"total_requests": 0,
                    "suspicious": {"count": 0, "paths": {}, "ips": {}},
                    "by_ip": {}}
+
+
+# ── auth_bruteforce: nur Auth-Endpunkte zählen (abgelaufene Tokens sind kein Angriff) ──
+
+def test_expired_token_polling_is_not_bruteforce():
+    # Legitimer Client pollt mit abgelaufenem Token: 360x 401 auf /api/notifications,
+    # aber 0 auf /api/auth/* -> kein 🚨-Alarm.
+    sec = {"total_requests": 400, "suspicious": {"count": 0, "paths": {}, "ips": {}},
+           "by_ip": {"10.0.0.5": {"total": 360, "c4xx": 360, "auth_fail": 360,
+                                  "auth_fail_scoped": 0, "distinct_paths": 2}}}
+    assert [s.kind for s in security.evaluate_security(sec, _cfg())] == []
+
+
+def test_bruteforce_on_auth_endpoints_fires():
+    sec = {"total_requests": 400, "suspicious": {"count": 0, "paths": {}, "ips": {}},
+           "by_ip": {"9.9.9.9": {"total": 90, "c4xx": 90, "auth_fail": 90,
+                                 "auth_fail_scoped": 88, "distinct_paths": 1}}}
+    sigs = security.evaluate_security(sec, _cfg())
+    assert [s.kind for s in sigs] == ["auth_bruteforce"]
+    assert "88" in sigs[0].detail and "/api/auth" in sigs[0].detail
+
+
+def test_falls_back_to_unscoped_count_when_agg_missing():
+    # Fehlt der gescopte Zähler (Feld/Aggregation nicht vorhanden), gilt das alte Verhalten —
+    # der Security-Check darf nicht still verstummen.
+    sec = {"total_requests": 400, "suspicious": {"count": 0, "paths": {}, "ips": {}},
+           "by_ip": {"9.9.9.9": {"total": 60, "c4xx": 60, "auth_fail": 55, "distinct_paths": 1}}}
+    assert [s.kind for s in security.evaluate_security(sec, _cfg())] == ["auth_bruteforce"]
+
+
+def test_security_window_scopes_auth_agg_to_prefix():
+    captured = {}
+
+    def fake_search(body, index=None):
+        captured["body"] = body
+        return {"hits": {"total": {"value": 0}}, "aggregations": {}}
+
+    c = ESClient(_cfg())
+    c._search = fake_search
+    c.security_window("a", "b")
+    scoped = captured["body"]["aggs"]["by_ip"]["aggs"]["auth_fail_scoped"]["filter"]
+    assert scoped["bool"]["must"][1]["prefix"]["url.path"]["value"] == "/api/auth"
+    # ungescopter Zähler bleibt erhalten (Fallback/Transparenz)
+    assert captured["body"]["aggs"]["by_ip"]["aggs"]["auth_fail"]["filter"] == {
+        "terms": {"http.response.status_code": [401, 403]}}

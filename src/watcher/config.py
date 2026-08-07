@@ -108,6 +108,10 @@ class Config:
     security_scan_min_paths: int = field(default_factory=lambda: _int("SECURITY_SCAN_MIN_PATHS", 15))
     # Auth-Brute-Force: ab so vielen abgelehnten Auth-Antworten (401/403) je Quell-IP.
     security_auth_fail_threshold: int = field(default_factory=lambda: _int("SECURITY_AUTH_FAIL_THRESHOLD", 25))
+    # …aber nur auf den Auth-Endpunkten. 401/403 auf normalen API-Pfaden sind meist ein
+    # legitimer Client mit abgelaufenem Token (60s-Poll = 360 Treffer/6h) — das ist kein
+    # Brute-Force und darf keinen 🚨-Alarm auslösen. "/" = jeder Pfad zählt (altes Verhalten).
+    security_auth_path_prefix: str = field(default_factory=lambda: _str("SECURITY_AUTH_PATH_PREFIX", "/api/auth"))
     # Felder der Zugriffslogs (Serilog/ECS-Defaults; alle direkt aggregierbar).
     security_status_field: str = field(default_factory=lambda: _str("SECURITY_STATUS_FIELD", "http.response.status_code"))
     security_path_field: str = field(default_factory=lambda: _str("SECURITY_PATH_FIELD", "url.path"))
@@ -194,18 +198,42 @@ class Config:
     def window_seconds(self) -> float:
         return self.window_hours * 3600
 
+    def _list_field_names(self) -> "set[str]":
+        """Namen aller Listen-Felder (Annotation ist wegen `from __future__ import annotations`
+        ein String)."""
+        from dataclasses import fields as _fields
+        return {f.name for f in _fields(self) if f.type == "list"}
+
     def with_overrides(self, overrides: dict) -> "Config":
         """Setzt bekannte Felder aus einem Dict (YAML) — unbekannte Keys werden ignoriert."""
         import logging
+        list_fields = self._list_field_names()
         for k, v in (overrides or {}).items():
-            if hasattr(self, k):
-                setattr(self, k, v)
-            else:
+            if not hasattr(self, k):
                 logging.getLogger("log-watcher").warning("Unbekannter Config-Key ignoriert: %s", k)
+                continue
+            if k in list_fields and not isinstance(v, list):
+                # Ein String statt einer Liste (z.B. `warn_spike_ignore: "curl exited"`) würde
+                # sonst zeichenweise iteriert: jede Message enthält irgendein Einzelzeichen ->
+                # warn_spike/new_errors lautlos tot. Wie bei ENV komma-splitten, sonst Config-Fehler.
+                if v is None:
+                    v = []
+                elif isinstance(v, str):
+                    v = [x.strip() for x in v.split(",") if x.strip()]
+                else:
+                    self._type_errors.append(f"'{k}' erwartet eine Liste, bekam {type(v).__name__}: {v!r}")
+                    continue
+            setattr(self, k, v)
         return self
 
+    @property
+    def _type_errors(self) -> list:
+        """Beim Laden gesammelte Typfehler — werden von validate() gemeldet (kein Dataclass-Feld,
+        damit sie nicht in Vergleich/Repr der Config auftauchen)."""
+        return self.__dict__.setdefault("__type_errors", [])
+
     def validate(self) -> "list[str]":
-        errs = []
+        errs = list(self._type_errors)
         if not self.es_url:
             errs.append("ES_URL fehlt")
         if not self.es_indices:
