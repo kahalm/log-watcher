@@ -37,3 +37,21 @@ def test_build_with_alerts():
     subject, text, html = digest.build(summaries, period_days=7)
     assert "2 Alert" in subject and "7d" in subject
     assert "<table" in html
+
+
+def test_digest_scrubs_pii_in_top_errors():
+    """Der Digest geht per Mail UND Discord raus — die Fehlermeldungen kommen roh aus ES.
+    Ohne Redaktion landeten Client-IPs, Mailadressen und Tokens im Klartext beim Empfänger,
+    obwohl SCRUB_PII aktiv ist (der Zyklus-Pfad schrubbt seine Meldungen längst)."""
+    msgs = {"Login failed for max@example.com from 45.9.1.2": 7,
+            "Bearer eyJabcdefghijklmnop abgelehnt": 3}
+
+    redigiert = digest._scrubbed_errors(msgs, True)
+
+    joined = " ".join(m for m, _ in redigiert)
+    assert "max@example.com" not in joined
+    assert "45.9.1.2" not in joined
+    assert "eyJabcdefghijklmnop" not in joined
+    assert [c for _, c in redigiert] == [7, 3]          # Zähler bleiben erhalten
+    # Ohne Scrubbing bleibt alles wie gehabt (Opt-out muss weiter funktionieren).
+    assert digest._scrubbed_errors(msgs, False) == list(msgs.items())

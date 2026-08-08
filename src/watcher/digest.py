@@ -4,6 +4,15 @@ from __future__ import annotations
 import html as _html
 from datetime import timedelta
 
+from . import scrub
+
+
+def _scrubbed_errors(messages: dict, scrub_pii: bool) -> list:
+    items = list(messages.items())[:5]
+    if not scrub_pii:
+        return items
+    return [(scrub.scrub(str(msg)), count) for msg, count in items]
+
 
 def _count_levels(levels: dict, names) -> int:
     return sum(levels.get(n, 0) for n in names)
@@ -25,7 +34,10 @@ def target_summary(cfg, es, period_seconds: float, now, iso) -> dict:
         "errors": _count_levels(agg["levels"], cfg.error_levels),
         "warnings": _count_levels(agg["levels"], cfg.warn_levels),
         "alerts": alerts,
-        "top_errors": list(agg.get("error_messages", {}).items())[:5],
+        # PII auch hier redigieren: der Digest geht per Mail UND Discord raus und zog die
+        # Fehlermeldungen bisher ROH aus Elasticsearch. Der Zyklus-Pfad (main.py) scrubbt seine
+        # error_messages längst — diese zweite Ausgangstür war die Lücke.
+        "top_errors": _scrubbed_errors(agg.get("error_messages", {}), getattr(cfg, "scrub_pii", True)),
     }
 
 

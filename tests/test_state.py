@@ -49,6 +49,13 @@ def test_signature_keeps_names_distinct():
     # Reine Zähler-Schwankungen desselben Vorfalls bleiben EINE Signatur (Cooldown greift).
     k = [_S("api_scan", "IP 45.9.1.2: 411 4xx über 52 Pfade")]
     assert state.signature(i) == state.signature(k)
+    # IPv6 ebenso: die Ziffernblöcke stecken zwischen Doppelpunkten und dürfen nicht als
+    # "volatile Zähler" normalisiert werden, sonst dedupen sich zwei Angreifer gegenseitig weg.
+    v6a = [_S("api_scan", "IP 2001:db8::42: 300 4xx über 40 Pfade")]
+    v6b = [_S("api_scan", "IP 2001:db8::99: 512 4xx über 61 Pfade")]
+    assert state.signature(v6a) != state.signature(v6b)
+    v6c = [_S("api_scan", "IP 2001:db8::42: 377 4xx über 44 Pfade")]
+    assert state.signature(v6a) == state.signature(v6c)
 
 
 def test_cooldown_window():

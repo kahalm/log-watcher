@@ -13,10 +13,12 @@ import tempfile
 
 # Freistehende Zahlen (Zähler, Schwellen, Minuten) in den Signal-Details. Die Lookarounds
 # schützen Zahlen, die Teil eines Namens sind: Host "vm2"/"vm-01", Index "logs-2", IP
-# "45.9.1.2" — sonst bekämen zwei verschiedene Hosts/Indizes/Angreifer dieselbe Signatur und
+# "45.9.1.2" und IPv6 "2001:db8::42" (deshalb auch ':' in den Lookarounds — ohne das kollabieren
+# zwei verschiedene IPv6-Angreifer auf dieselbe Signatur) — sonst bekämen zwei verschiedene
+# Hosts/Indizes/Angreifer dieselbe Signatur und
 # würden einander wegdedupen (12h-Cooldown + gecachtes Verdict). Ein blosses \b reicht dafür
 # NICHT: '-' und '.' sind Nicht-Wortzeichen, "logs-2" würde damit zu "logs-<n>".
-_VOLATILE_NUM = re.compile(r"(?<![\w.-])\d+(?![\w.-])")
+_VOLATILE_NUM = re.compile(r"(?<![\w.:-])\d+(?![\w.:-])")
 
 _SEEN_RETENTION = 180 * 86400
 _VERDICT_RETENTION = 7 * 86400
