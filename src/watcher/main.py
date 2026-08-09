@@ -403,7 +403,11 @@ def _maybe_digest(glob: Config, clients, st: dict, now: datetime) -> None:
                 log.error("Digest-Mail fehlgeschlagen: %s", e)
         if glob.discord_webhook_url:
             try:
-                discord_notify.post_text(glob.discord_webhook_url, f"**{subject}**\n```\n{text_body[:1800]}\n```")
+                # Backticks raus: die Top-Fehlermeldungen kommen roh aus ES — ein ``` darin würde
+                # den Code-Zaun sprengen und den Rest als Markdown rendern. Mentions (@everyone)
+                # entschärft discord_notify.post zentral via allowed_mentions {parse: []}.
+                fenced = text_body[:1800].replace("`", "'")
+                discord_notify.post_text(glob.discord_webhook_url, f"**{subject}**\n```\n{fenced}\n```")
                 delivered = True
                 log.info("Digest an Discord gesendet.")
             except Exception as e:  # noqa: BLE001

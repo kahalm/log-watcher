@@ -70,6 +70,47 @@ def test_failed_delivery_still_persists_fingerprints(tmp_path):
     assert state.load_state(cfg.state_file)["targets"]["t"]["seen"]
 
 
+class _EvilES:
+    """Fehlermeldungen mit Markdown/Mention — so kämen sie roh aus ES."""
+
+    def aggregate_window(self, a, b):
+        return {"total": 10, "levels": {"Error": 5},
+                "error_messages": {"``` @everyone [klick](https://evil.example)": 5}, "per_index": {}}
+
+    def count(self, index, query):
+        return 1
+
+
+def test_digest_discord_dead_mentions_and_intact_fence(tmp_path, monkeypatch):
+    """Digest-Pfad: das Wire-Payload muss allowed_mentions {parse: []} tragen (@everyone tot),
+    und Backticks aus ES-Fehlermeldungen dürfen den Code-Zaun nicht sprengen."""
+    import json
+    from watcher import discord_notify
+
+    glob = _cfg(tmp_path)
+    glob.digest_enabled = True
+    glob.digest_hour = 0
+    captured = {}
+
+    class FakeResp:
+        status = 204
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["data"] = req.data
+        return FakeResp()
+
+    monkeypatch.setattr(discord_notify.urllib.request, "urlopen", fake_urlopen)
+    with patch("watcher.main.state.save_state"):
+        _maybe_digest(glob, [(glob, _EvilES())], {}, _now())
+
+    payload = json.loads(captured["data"])
+    assert payload["allowed_mentions"] == {"parse": []}
+    # Nur die zwei Zaun-Markierungen selbst — die Backticks der Fehlermeldung sind neutralisiert.
+    assert payload["content"].count("`") == 6
+
+
 def test_digest_marker_only_after_successful_send(tmp_path):
     glob = _cfg(tmp_path)
     glob.digest_enabled = True
