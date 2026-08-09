@@ -35,7 +35,18 @@ FORCED_KINDS = {"linux_ssh_bruteforce"}
 # match_phrase-Muster je Kategorie (case-insensitiv analysiert der Standard-Analyzer).
 SSH_FAIL_PHRASES = ["Failed password", "Invalid user"]
 OOM_PHRASES = ["Out of memory", "oom-kill", "oom_reaper"]
-DISK_PHRASES = ["I/O error", "EXT4-fs error", "XFS", "Medium Error", "critical medium error"]
+# FALLE (Fehlalarm 02.+09.08.2026, je HIGH): das nackte "XFS" matchte die systemd-Zeilen des
+# WOECHENTLICHEN xfs_scrub_all-Timers ("Starting/Finished ... Online XFS Metadata Check ...")
+# — zwei Zeilen je Lauf, Schwelle 2 => jeden Samstagnacht ein Disk-HIGH ohne jedes Disk-Problem.
+# Diese Phrasen gehen als match_phrase durch den Standard-Analyzer (Satzzeichen fallen weg),
+# ein "XFS (" waere also identisch mit "XFS". Darum: das Dateisystem NIE allein matchen,
+# sondern nur Muster, die in echten Fehlerzeilen vorkommen ("XFS (sdb1): ... I/O error",
+# "Corruption of in-memory data detected. Shutting down filesystem").
+DISK_PHRASES = [
+    "I/O error", "EXT4-fs error", "Medium Error", "critical medium error",
+    "blk_update_request", "corruption detected", "Corruption of in-memory data",
+    "Shutting down filesystem",
+]
 UNIT_FAIL_PHRASES = ["entered failed state", "Failed with result"]
 
 

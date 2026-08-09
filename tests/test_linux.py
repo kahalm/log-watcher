@@ -97,3 +97,16 @@ def test_parse_linux():
 
 def test_parse_linux_empty():
     assert ESClient._parse_linux({}, {}) == {"hosts": {}, "baseline_hosts": {}}
+
+
+def test_disk_phrases_enthalten_kein_nacktes_dateisystem():
+    """Fehlalarm-Wache (02.+09.08.2026): ein Ein-Token-Muster wie "XFS" matcht auch die
+    systemd-Zeilen des woechentlichen xfs_scrub_all-Timers ("Online XFS Metadata Check")
+    und loeste jeden Samstag einen Disk-HIGH aus. match_phrase analysiert mit dem
+    Standard-Analyzer — Satzzeichen retten ein Ein-Wort-Muster also NICHT."""
+    from watcher.linux import DISK_PHRASES
+    for phrase in DISK_PHRASES:
+        tokens = [t for t in __import__("re").split(r"[^0-9A-Za-z]+", phrase.lower()) if t]
+        assert len(tokens) >= 2, f"Ein-Token-Disk-Muster ist ein Fehlalarm-Risiko: {phrase!r}"
+        assert tokens != ["xfs"], phrase
+
