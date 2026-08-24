@@ -259,16 +259,37 @@ class ESClient:
         aggregierbar / Index fehlt) leeres Ergebnis statt Zyklus-Abbruch;
         Verbindungs-/Serverfehler werden weitergereicht.
         """
-        from .linux import SSH_FAIL_PHRASES, OOM_PHRASES, DISK_PHRASES, UNIT_FAIL_PHRASES
+        from .linux import (SSH_FAIL_PHRASES, OOM_PHRASES, DISK_PHRASES,
+                            DISK_KERNEL_ONLY_PHRASES, DISK_BENIGN_PHRASES,
+                            UNIT_FAIL_PHRASES)
         cfg = self.cfg
         index = ",".join(cfg.linux_indices)
         host_f = cfg.linux_host_field
+        msg_f = cfg.linux_message_field
+
+        def phrase_clauses(phrases):
+            return [{"match_phrase": {msg_f: p}} for p in phrases]
 
         def phrase_filter(phrases):
             return {"filter": {"bool": {
-                "should": [{"match_phrase": {cfg.linux_message_field: p}} for p in phrases],
+                "should": phrase_clauses(phrases),
                 "minimum_should_match": 1,
             }}}
+
+        # Disk-Zaehler: eindeutige Muster aus jeder Quelle; mehrdeutige (z.B. "I/O error")
+        # nur vom Kernel; gutartige Signaturen (PBS-File-Restore-Treiberproben) raus.
+        # Fehlt linux_kernel_ident_field in den Docs (anderer Shipper), matcht die
+        # Kernel-Klausel schlicht nicht — die eindeutigen Muster tragen dann allein.
+        disk_filter = {"filter": {"bool": {
+            "should": phrase_clauses(DISK_PHRASES) + [
+                {"bool": {
+                    "must": [{"match_phrase": {msg_f: p}}],
+                    "filter": [{"term": {cfg.linux_kernel_ident_field: "kernel"}}],
+                }} for p in DISK_KERNEL_ONLY_PHRASES
+            ],
+            "minimum_should_match": 1,
+            "must_not": phrase_clauses(DISK_BENIGN_PHRASES),
+        }}}
 
         body = {
             "size": 0, "track_total_hits": False,
@@ -278,7 +299,7 @@ class ESClient:
                 "aggs": {
                     "ssh_fail": phrase_filter(SSH_FAIL_PHRASES),
                     "oom": phrase_filter(OOM_PHRASES),
-                    "disk": phrase_filter(DISK_PHRASES),
+                    "disk": disk_filter,
                     "unit_fail": phrase_filter(UNIT_FAIL_PHRASES),
                 },
             }},

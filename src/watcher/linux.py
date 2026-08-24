@@ -42,11 +42,33 @@ OOM_PHRASES = ["Out of memory", "oom-kill", "oom_reaper"]
 # ein "XFS (" waere also identisch mit "XFS". Darum: das Dateisystem NIE allein matchen,
 # sondern nur Muster, die in echten Fehlerzeilen vorkommen ("XFS (sdb1): ... I/O error",
 # "Corruption of in-memory data detected. Shutting down filesystem").
+#
+# FALLE 2 (Untersuchung 23./24.08.2026): das generische "I/O error" trifft auch gutartige
+# Nicht-Kernel-Zeilen. Konkreter Fall: der PBS-File-Restore-Daemon (proxmox_restore_daemon)
+# probiert beim Restore mehrere FS-Treiber an einer GAST-Partition durch; nicht passende
+# melden "mount error on '/dev/vda2' (ntfs3) - EIO: I/O error" — erwartetes Verhalten, kein
+# Host-Plattenfehler. Darum drei Listen:
+#   - DISK_PHRASES            : eindeutige Fehlermuster, Quelle egal.
+#   - DISK_KERNEL_ONLY_PHRASES: mehrdeutige Muster, zaehlen nur wenn die Meldung vom Kernel
+#                               stammt (term auf linux_kernel_ident_field == "kernel");
+#                               deckt moderne Kernel ab, die "I/O error, dev sdX, sector ..."
+#                               ohne "blk_update_request:"-Praefix loggen.
+#   - DISK_BENIGN_PHRASES     : bekannte gutartige Signaturen, schliessen global aus
+#                               (must_not) — eng halten, nie pauschal "I/O error" filtern.
 DISK_PHRASES = [
-    "I/O error", "EXT4-fs error", "Medium Error", "critical medium error",
-    "blk_update_request", "corruption detected", "Corruption of in-memory data",
-    "Shutting down filesystem",
+    # Kernel-Blockschicht / SCSI / ATA
+    "blk_update_request", "Buffer I/O error", "Medium Error", "critical medium error",
+    "failed command: READ FPDMA QUEUED", "failed command: WRITE FPDMA QUEUED",
+    # Dateisystem-Fehler (EXT4/XFS); "metadata I/O error" = XFS-Metadaten-Lesefehler
+    "EXT4-fs error", "metadata I/O error", "corruption detected",
+    "Corruption of in-memory data", "Shutting down filesystem",
+    # smartd: Platte meldet schwebende/nicht korrigierbare Sektoren
+    "Currently unreadable (pending) sectors", "Offline uncorrectable sectors",
 ]
+# Bewusst NICHT aufgenommen: "hard resetting link" / "exception Emask" — feuern auch bei
+# Hotplug/Resume ohne Defekt; echte ata-Fehler bringen ohnehin "failed command"/"Medium Error".
+DISK_KERNEL_ONLY_PHRASES = ["I/O error"]
+DISK_BENIGN_PHRASES = ["proxmox_restore_daemon", "mount error on"]
 UNIT_FAIL_PHRASES = ["entered failed state", "Failed with result"]
 
 

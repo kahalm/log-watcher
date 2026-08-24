@@ -55,7 +55,7 @@ False-Positives niedrig.
 | `auth_bruteforce` | high | eine Quell-IP sammelt viele abgelehnte Auth-Antworten (401/403) → möglicher Brute-Force/Credential-Stuffing |
 | `linux_ssh_bruteforce` | high | viele fehlgeschlagene SSH-Logins („Failed password"/„Invalid user") auf einem Host (Filebeat-/journald-Logs, `LINUX_INDICES`) — wird wie die Security-Signale IMMER alarmiert |
 | `linux_oom` | high | der Kernel-OOM-Killer hat auf einem Host zugeschlagen |
-| `linux_disk_errors` | high | Disk-/Dateisystem-Fehler (I/O error, EXT4-/XFS-Korruption) auf einem Host |
+| `linux_disk_errors` | high | Disk-/Dateisystem-Fehler auf einem Host: eindeutige Kernel-/FS-/smartd-Muster (`blk_update_request`, `Buffer I/O error`, `EXT4-fs error`, XFS-Korruption, schwebende Sektoren …) aus jeder Quelle; das mehrdeutige nackte `I/O error` zählt nur, wenn die Meldung vom Kernel stammt (`linux_kernel_ident_field` == `kernel`). Gutartige Signaturen (PBS-File-Restore-Treiberproben: `proxmox_restore_daemon`, `mount error on … EIO`) sind ausgeschlossen |
 | `linux_unit_failures` | medium | auffällig viele systemd-Unit-Fehlschläge auf einem Host |
 | `linux_host_silent` | high | ein Host, der im Vorfenster System-Logs lieferte, ist komplett verstummt → Filebeat/VM/Host prüfen |
 

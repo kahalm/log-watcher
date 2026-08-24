@@ -140,6 +140,9 @@ class Config:
     # Felder der Filebeat-Docs.
     linux_host_field: str = field(default_factory=lambda: _str("LINUX_HOST_FIELD", "host.hostname"))
     linux_message_field: str = field(default_factory=lambda: _str("LINUX_MESSAGE_FIELD", "message"))
+    # Quelle einer journald-Meldung (keyword-Feld); Wert "kernel" schaltet die mehrdeutigen
+    # Disk-Muster (DISK_KERNEL_ONLY_PHRASES, z.B. nacktes "I/O error") frei.
+    linux_kernel_ident_field: str = field(default_factory=lambda: _str("LINUX_KERNEL_IDENT_FIELD", "syslog.identifier"))
     # Wie viele Hosts (Top nach Log-Volumen) je Fenster geprüft werden.
     linux_top_hosts: int = field(default_factory=lambda: _int("LINUX_TOP_HOSTS", 50))
 

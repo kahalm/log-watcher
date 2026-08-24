@@ -110,3 +110,72 @@ def test_disk_phrases_enthalten_kein_nacktes_dateisystem():
         assert len(tokens) >= 2, f"Ein-Token-Disk-Muster ist ein Fehlalarm-Risiko: {phrase!r}"
         assert tokens != ["xfs"], phrase
 
+
+
+# ── Disk-Heuristik: Kernel-Scoping + Benign-Ausschluss (Untersuchung 23./24.08.2026) ──
+
+def test_disk_io_error_nur_kernel_gescoped():
+    """Wache: das mehrdeutige nackte "I/O error" darf NIE wieder quellen-blind in
+    DISK_PHRASES landen — es matcht sonst gutartige App-Zeilen wie die
+    FS-Treiberproben des PBS-File-Restore-Daemons ("... - EIO: I/O error")."""
+    from watcher.linux import DISK_PHRASES, DISK_KERNEL_ONLY_PHRASES, DISK_BENIGN_PHRASES
+    assert "I/O error" not in DISK_PHRASES
+    assert "I/O error" in DISK_KERNEL_ONLY_PHRASES
+    assert "proxmox_restore_daemon" in DISK_BENIGN_PHRASES
+    assert "mount error on" in DISK_BENIGN_PHRASES
+
+
+def test_linux_window_disk_query_kernel_scoped_und_benign_excluded():
+    """Der gebaute ES-Aggregat-Filter fuer `disk` muss (a) gutartige Signaturen per
+    must_not ausschliessen, (b) "I/O error" nur kernel-gescoped zaehlen und (c) die
+    eindeutigen Muster weiterhin quellen-unabhaengig enthalten."""
+    from watcher.linux import DISK_PHRASES, DISK_BENIGN_PHRASES
+    cfg = _cfg()
+    es = ESClient(cfg)
+    bodies = []
+
+    def fake_search(body, index=None):
+        bodies.append(body)
+        return {}
+
+    es._search = fake_search
+    es.linux_window("2026-08-23T00:00:00Z", "2026-08-23T06:00:00Z",
+                    "2026-08-22T18:00:00Z")
+
+    disk = bodies[0]["aggs"]["by_host"]["aggs"]["disk"]["filter"]["bool"]
+
+    # (a) Benign-Signaturen ausgeschlossen
+    must_not_phrases = [c["match_phrase"]["message"] for c in disk["must_not"]]
+    assert set(must_not_phrases) == set(DISK_BENIGN_PHRASES)
+
+    # (b) "I/O error" NUR innerhalb der kernel-gescopten bool-Klausel
+    plain = [c for c in disk["should"]
+             if c.get("match_phrase", {}).get("message") == "I/O error"]
+    assert plain == [], "nacktes 'I/O error' darf nicht quellen-blind zaehlen"
+    kernel_clauses = [c for c in disk["should"] if "bool" in c]
+    assert len(kernel_clauses) == 1
+    kc = kernel_clauses[0]["bool"]
+    assert kc["must"] == [{"match_phrase": {"message": "I/O error"}}]
+    assert kc["filter"] == [{"term": {"syslog.identifier": "kernel"}}]
+
+    # (c) eindeutige Muster unveraendert quellen-unabhaengig dabei
+    should_phrases = [c["match_phrase"]["message"] for c in disk["should"]
+                      if "match_phrase" in c]
+    assert set(should_phrases) == set(DISK_PHRASES)
+    assert disk["minimum_should_match"] == 1
+
+    # andere Kategorien unveraendert schlicht (kein must_not)
+    ssh = bodies[0]["aggs"]["by_host"]["aggs"]["ssh_fail"]["filter"]["bool"]
+    assert "must_not" not in ssh
+
+
+def test_linux_kernel_ident_field_konfigurierbar():
+    cfg = _cfg(linux_kernel_ident_field="journald.process.name")
+    es = ESClient(cfg)
+    bodies = []
+    es._search = lambda body, index=None: bodies.append(body) or {}
+    es.linux_window("2026-08-23T00:00:00Z", "2026-08-23T06:00:00Z",
+                    "2026-08-22T18:00:00Z")
+    disk = bodies[0]["aggs"]["by_host"]["aggs"]["disk"]["filter"]["bool"]
+    kc = [c for c in disk["should"] if "bool" in c][0]["bool"]
+    assert kc["filter"] == [{"term": {"journald.process.name": "kernel"}}]

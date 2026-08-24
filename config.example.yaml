@@ -41,6 +41,11 @@ targets:
     # Linux-System-Logs (Filebeat/journald von Host + VMs) mitüberwachen:
     # SSH-Brute-Force, OOM-Kills, Disk-Fehler, Unit-Failures, verstummte Hosts.
     linux_indices: [filebeat-*]
+    # Quelle einer journald-Meldung (keyword-Feld, Filebeat-Default "syslog.identifier").
+    # Mehrdeutige Disk-Muster (nacktes "I/O error") zaehlen nur, wenn dieses Feld
+    # "kernel" ist — gutartige App-Zeilen (z.B. PBS-File-Restore-Treiberproben
+    # "mount error on '/dev/vda2' (ntfs3) - EIO: I/O error") loesen keinen HIGH aus.
+    # linux_kernel_ident_field: syslog.identifier
     alert_index_prefix: log-watcher-alerts
 
   # ── ES-Instanz B (anderer Host/Port, eigener API-Key) ───────────────────────
