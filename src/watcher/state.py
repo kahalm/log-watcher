@@ -110,6 +110,49 @@ def put_verdict(state: dict, target: str, sig: str, assessment: dict, now: float
     return state
 
 
+# --- LLM-Ausfall (Guthaben leer, Schluessel abgelehnt, ...), global ---
+# Ein Ausfall ist NICHT "alles in Ordnung": solange er anhaelt, faellt die Bewertung auf die
+# Regeln zurueck und niemand darf aus dem Ausbleiben eines Alarms auf Ruhe schliessen. Deshalb
+# wird er im Zustand gemerkt (nicht je Target, sondern global — der Schluessel ist derselbe).
+def set_llm_outage(state: dict, kind: str, reason: str, now: float) -> dict:
+    """Merkt einen gescheiterten LLM-Aufruf. `since` bleibt die ERSTE Beobachtung."""
+    outage = state.get("llm_outage")
+    if not isinstance(outage, dict) or "since" not in outage:
+        outage = {"since": now}
+    outage["kind"] = kind
+    outage["reason"] = reason
+    outage["last_seen"] = now
+    state["llm_outage"] = outage
+    return state
+
+
+def llm_outage(state: dict) -> dict | None:
+    """Der laufende Ausfall, oder None."""
+    outage = state.get("llm_outage")
+    return outage if isinstance(outage, dict) else None
+
+
+def llm_outage_needs_notice(state: dict, now: float, every_seconds: float) -> bool:
+    """True, wenn ueber den laufenden Ausfall (wieder) zu warnen ist."""
+    outage = llm_outage(state)
+    if outage is None:
+        return False
+    last = outage.get("notified_at")
+    return not isinstance(last, (int, float)) or (now - last) >= every_seconds
+
+
+def record_llm_outage_notice(state: dict, now: float) -> dict:
+    outage = llm_outage(state)
+    if outage is not None:
+        outage["notified_at"] = now
+    return state
+
+
+def clear_llm_outage(state: dict) -> dict | None:
+    """Beendet den Ausfall und gibt den beendeten Eintrag zurueck (fuer die Entwarnung)."""
+    return state.pop("llm_outage", None)
+
+
 # --- LLM-Tagesbudget (Feature 11), global ---
 def llm_calls_remaining(state: dict, day: str, max_calls: int) -> int:
     b = state.get("llm_budget", {})

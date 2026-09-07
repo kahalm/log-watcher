@@ -207,7 +207,21 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             state.record_llm_call(st, day, assessment.get("llm_tokens", 0))
             METRICS.inc("llm_calls_total")
             METRICS.inc("llm_tokens_total", assessment.get("llm_tokens", 0))
-        state.put_verdict(st, cfg.name, sig, assessment, now_ts)
+            ended = state.clear_llm_outage(st)
+            if ended is not None and ended.get("notified_at") is not None:
+                # Nur entwarnen, wenn auch gewarnt wurde — sonst meldet der Waechter eine
+                # Stoerung, die nie jemand zu sehen bekam.
+                st["llm_recovered"] = {"kind": ended.get("kind"), "reason": ended.get("reason"),
+                                       "since": ended.get("since"), "at": now_ts}
+        if assessment.get("llm_error"):
+            # Ausfall festhalten (die Warnung geht in der Hauptschleife raus) und das degradierte
+            # Urteil NICHT in den Verdict-Cache legen: sonst gilt die Notbewertung noch Stunden
+            # weiter, nachdem das Guthaben wieder da ist.
+            state.set_llm_outage(st, assessment.get("llm_error_kind", "sonstiges"),
+                                 assessment["llm_error"], now_ts)
+            METRICS.inc("llm_errors_total")
+        else:
+            state.put_verdict(st, cfg.name, sig, assessment, now_ts)
 
     # Bestätigte Security-Signale sind immer eine „große Warnung": der LLM darf einen
     # erkannten Scan/Brute-Force nicht zu „nicht auffällig" herabstufen.
@@ -437,8 +451,81 @@ def _any_recent_alert(st: dict, targets, since_ts: float) -> bool:
     return False
 
 
+def _outage_age(outage: dict, now: datetime) -> str:
+    """Dauer des Ausfalls in Klartext („seit 3 h 20 min“)."""
+    since = outage.get("since")
+    if not isinstance(since, (int, float)):
+        return "unbekannt lange"
+    minutes = max(0, int((now.timestamp() - since) // 60))
+    if minutes < 60:
+        return f"seit {minutes} min"
+    return f"seit {minutes // 60} h {minutes % 60:02d} min"
+
+
+def _maybe_llm_outage_warning(glob: Config, st: dict, now: datetime) -> None:
+    """Warnt, solange die LLM-Bewertung nicht laeuft — statt Stille oder „alles in Ordnung“.
+
+    Der Fall, der das ausgeloest hat: leeres Anthropic-Guthaben. Der Wachhund lief weiter,
+    schrieb 84-mal einen Traceback ins eigene Log und meldete nach Discord nichts — waehrend
+    das Regel-Gate mehrfach angeschlagen hatte. Wer nichts hoert, schliesst auf Ruhe; genau
+    das darf ein Ausfall des Bewerters nicht bedeuten.
+    """
+    if not glob.discord_webhook_url:
+        return
+
+    recovered = st.pop("llm_recovered", None)
+    if isinstance(recovered, dict):
+        msg = ("✅ **Log-Wächter bewertet wieder vollständig.**\n"
+               f"> {recovered.get('reason', 'LLM-Aufruf')} — behoben.")
+        if glob.dry_run:
+            log.info("DRY_RUN: LLM-Entwarnung: %s", msg)
+        else:
+            try:
+                discord_notify.post_text(glob.discord_webhook_url, msg)
+                log.info("LLM-Entwarnung an Discord gesendet.")
+            except Exception as e:  # noqa: BLE001
+                log.error("LLM-Entwarnung an Discord fehlgeschlagen: %s", e)
+        state.save_state(glob.state_file, st)
+
+    if not state.llm_outage_needs_notice(st, now.timestamp(), glob.llm_outage_notice_hours * 3600):
+        return
+    outage = state.llm_outage(st)
+    assert outage is not None  # llm_outage_needs_notice hat es schon geprueft
+
+    todo = {
+        "guthaben": "Guthaben aufladen (Anthropic Console → Plans & Billing).",
+        "schluessel": "ANTHROPIC_API_KEY im Stack ersetzen.",
+        "drosselung": "Meist von selbst vorbei — haelt es an, Intervall oder Modell pruefen.",
+    }.get(outage.get("kind"), "Log des Waechters ansehen: `docker logs log-watcher`.")
+
+    msg = ("⚠️ **Log-Wächter arbeitet nur noch regelbasiert.**\n"
+           f"> {outage.get('reason', 'LLM-Aufruf scheitert')} ({_outage_age(outage, now)})\n\n"
+           "Regel-Alarme (Sicherheit, Fehler-Ausschläge, Systemmeldungen) laufen weiter — "
+           "die **Bewertung und Einordnung fehlt**, und die tägliche Alles-in-Ordnung-Meldung "
+           "bleibt aus, solange das so ist.\n"
+           f"→ {todo}")
+
+    if glob.dry_run:
+        log.warning("DRY_RUN: LLM-Ausfall-Warnung: %s", msg)
+    else:
+        try:
+            discord_notify.post_text(glob.discord_webhook_url, msg)
+            log.warning("LLM-Ausfall-Warnung an Discord gesendet (%s).", outage.get("kind"))
+        except Exception as e:  # noqa: BLE001
+            log.error("LLM-Ausfall-Warnung an Discord fehlgeschlagen: %s", e)
+            return   # nicht als gemeldet verbuchen, dann greift der naechste Zyklus
+    state.record_llm_outage_notice(st, now.timestamp())
+    state.save_state(glob.state_file, st)
+
+
 def _maybe_alliswell(glob: Config, targets, st: dict, now: datetime) -> None:
     if not glob.alliswell_enabled or not glob.discord_webhook_url:
+        return
+    # Kein „alles in Ordnung“, wenn der Bewerter nicht arbeitet: die Meldung sagt „ich habe
+    # nachgesehen und nichts gefunden“, und genau das stimmt dann nicht. Gewarnt hat
+    # _maybe_llm_outage_warning bereits.
+    if state.llm_outage(st) is not None:
+        log.info("All-is-well unterdrueckt: LLM-Bewertung ausgefallen.")
         return
     last = st.get("last_alliswell")
     if last is not None:
@@ -551,6 +638,7 @@ def main() -> int:
         try:
             shared_st = state.load_state(glob.state_file)
             _maybe_digest(glob, clients, shared_st, cycle_now)
+            _maybe_llm_outage_warning(glob, shared_st, cycle_now)
             _maybe_alliswell(glob, [cfg for cfg, _ in clients], shared_st, cycle_now)
         except Exception:
             log.exception("Digest/All-is-well fehlgeschlagen")

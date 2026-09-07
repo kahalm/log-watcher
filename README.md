@@ -111,6 +111,7 @@ Siehe `.env.example`. Wichtigste Werte:
 | `LINUX_HOST_FIELD` / `LINUX_MESSAGE_FIELD` | `host.hostname` / `message` | Felder der Filebeat-Docs |
 | `ANTHROPIC_API_KEY` | – | optional; ohne → rein regelbasiert |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | günstiges Monitoring-Modell |
+| `LLM_OUTAGE_NOTICE_HOURS` | `24` | Abstand der Discord-**Warnung**, solange der LLM-Aufruf scheitert (leeres Guthaben, abgelehnter Schlüssel, Drosselung). Der Zyklus läuft dabei regelbasiert weiter, und die tägliche „alles in Ordnung"-Meldung bleibt aus — sie würde behaupten, es habe jemand nachgesehen. `0` = jeden Zyklus warnen |
 | `SMTP_*` | – | Mailversand (Pflicht außer `DRY_RUN=true`) |
 | `COOLDOWN_HOURS` | `12` | gleiche Auffälligkeit nicht öfter melden (Signatur über die Signal-Details **ohne** die Fenster-Zähler; der Cooldown wird erst gestempelt, wenn mindestens ein Kanal die Zustellung geschafft hat) |
 | `DRY_RUN` | `false` | keine Mail, nur loggen (zum Einrichten) |

@@ -40,6 +40,44 @@ _SYSTEM = (
 )
 
 
+def rule_based(signals, summary: str, llm_error: str | None = None,
+               llm_error_kind: str | None = None) -> dict:
+    """Bewertung allein aus den Regeln — der Rückfallweg ohne LLM."""
+    from .rules import overall_severity
+    result = {
+        "anomalous": True,
+        "severity": overall_severity(signals),
+        "summary": summary,
+        "suspected_cause": "unklar",
+        "recommended_action": "Logs in Kibana prüfen.",
+        "llm_used": False,
+        "llm_tokens": 0,
+    }
+    if llm_error:
+        result["llm_error"] = llm_error
+        result["llm_error_kind"] = llm_error_kind or "sonstiges"
+    return result
+
+
+def classify_llm_error(exc: BaseException) -> tuple[str, str]:
+    """(Art, Klartext) eines gescheiterten LLM-Aufrufs.
+
+    Die Art entscheidet, was zu TUN ist, und genau das soll in der Warnung stehen: leeres
+    Guthaben will aufgeladen werden, ein abgelehnter Schlüssel ersetzt, eine Drosselung
+    ausgesessen. Erkannt wird am Text der API-Antwort, weil die Fehlerklassen des SDK
+    (BadRequestError) beides abdecken — Guthaben UND echte Anfragefehler.
+    """
+    text = str(exc)
+    low = text.lower()
+    if "credit balance" in low or "plans & billing" in low or "billing" in low:
+        return "guthaben", "Anthropic-Guthaben erschöpft"
+    if "authentication" in low or "invalid x-api-key" in low or "401" in low:
+        return "schluessel", "API-Schlüssel abgelehnt"
+    if "rate limit" in low or "429" in low or "overloaded" in low:
+        return "drosselung", "API drosselt oder ist überlastet"
+    return "sonstiges", text.strip().splitlines()[0][:200] if text.strip() else exc.__class__.__name__
+
+
 def assess(cfg, current, baseline, signals, samples=None, use_llm=None) -> dict:
     """Gibt {anomalous, severity, summary, …, llm_used, llm_tokens} zurück.
 
@@ -51,16 +89,7 @@ def assess(cfg, current, baseline, signals, samples=None, use_llm=None) -> dict:
 
     if not use_llm:
         # Hybrid degradiert sauber: ohne LLM (kein Key / Budget erschöpft) regelbasiert melden.
-        from .rules import overall_severity
-        return {
-            "anomalous": True,
-            "severity": overall_severity(signals),
-            "summary": "Regelbasierte Auffälligkeit (LLM übersprungen).",
-            "suspected_cause": "unklar",
-            "recommended_action": "Logs in Kibana prüfen.",
-            "llm_used": False,
-            "llm_tokens": 0,
-        }
+        return rule_based(signals, "Regelbasierte Auffälligkeit (LLM übersprungen).")
 
     payload = {
         "window_hours": cfg.window_hours,
@@ -75,17 +104,28 @@ def assess(cfg, current, baseline, signals, samples=None, use_llm=None) -> dict:
     import anthropic  # lazy: nur nötig wenn LLM wirklich verwendet wird
 
     client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
-    msg = client.messages.create(
-        model=cfg.model,
-        max_tokens=cfg.max_tokens,
-        system=_SYSTEM,
-        tools=[_TOOL],
-        tool_choice={"type": "tool", "name": "report_assessment"},
-        messages=[{
-            "role": "user",
-            "content": "Bewerte diese Log-Aggregate:\n\n" + json.dumps(payload, ensure_ascii=False, indent=2),
-        }],
-    )
+    try:
+        msg = client.messages.create(
+            model=cfg.model,
+            max_tokens=cfg.max_tokens,
+            system=_SYSTEM,
+            tools=[_TOOL],
+            tool_choice={"type": "tool", "name": "report_assessment"},
+            messages=[{
+                "role": "user",
+                "content": "Bewerte diese Log-Aggregate:\n\n" + json.dumps(payload, ensure_ascii=False, indent=2),
+            }],
+        )
+    except Exception as e:  # noqa: BLE001
+        # Ein toter LLM-Aufruf darf den Zyklus NICHT abbrechen: vorher flog die Ausnahme bis in
+        # die Hauptschleife, der Alarm blieb aus, und der Wachhund schwieg genau dann, wenn das
+        # Regel-Gate schon angeschlagen hatte (beobachtet 2026-09-06/07: 84 Zyklen am Stueck,
+        # Guthaben leer). Jetzt: regelbasiert weitermachen und den Ausfall benennen — der
+        # Aufrufer warnt darueber und unterdrueckt die Alles-in-Ordnung-Meldung.
+        kind, reason = classify_llm_error(e)
+        log.error("LLM-Aufruf fehlgeschlagen (%s): %s", kind, reason)
+        return rule_based(signals, f"Regelbasierte Auffälligkeit — LLM nicht verfügbar ({reason}).",
+                          llm_error=reason, llm_error_kind=kind)
     usage = getattr(msg, "usage", None)
     tokens = 0
     if usage is not None:

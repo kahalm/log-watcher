@@ -191,6 +191,10 @@ class Config:
     # --- All-is-well (tägliche Wächter-Meldung) ---
     alliswell_enabled: bool = field(default_factory=lambda: _bool("ALLISWELL_ENABLED", True))
     alliswell_hour: int = field(default_factory=lambda: _int("ALLISWELL_HOUR_UTC", 8))
+    # Abstand der Warnung, solange der LLM-Aufruf scheitert (Guthaben leer, Schlüssel abgelehnt).
+    # Einmal am Tag: der Ausfall dauert, bis jemand etwas tut — jeder Zyklus (10 min) wäre Lärm,
+    # und Lärm ist genau der Grund, warum eine echte Warnung übersehen wird.
+    llm_outage_notice_hours: int = field(default_factory=lambda: _int("LLM_OUTAGE_NOTICE_HOURS", 24))
 
     # --- Sonstiges ---
     dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))
