@@ -51,7 +51,7 @@ False-Positives niedrig.
 | `index_silent` | high | ein Index verstummt, während andere weiterloggen (Teil-Ausfall). **Familien-bewusst**: Data-Stream-Backing-Indizes (`.ds-…-000001/-000002`) UND klassische datierte Indizes (`…-2026.06` monatlich / `…-2026.06.11` täglich) werden auf ihre Familie kollabiert — ein reiner Rollover (alte Index → 0, neue aktiv) löst also KEINEN Fehlalarm mehr aus; gemeldet wird der Familien-Name |
 | `heartbeat_missing` | high | ein Dienst hat in den letzten N min KEIN Lebenszeichen geschrieben (vermutlich tot/hängend) — pro Dienst, genauer als Index-Stille |
 | `suspicious_requests` | high | Aufrufe auf bekannte Scanner-/Exploit-Pfade (`.env`, `wp-login`, `phpMyAdmin`, `/.git`, Pfad-Traversal, `.php` gegen die .NET-API …), die mit 4xx/5xx enden — jemand klopft die API ab |
-| `api_scan` | high | eine einzelne Quell-IP erzeugt viele 4xx über viele **verschiedene** Pfade → Pfad-Enumeration/Fuzzing (legitime, wiederholte 404 auf wenige Endpunkte lösen dadurch NICHT aus) |
+| `api_scan` | high | eine einzelne Quell-IP erzeugt viele 4xx über viele **verschiedene** Pfade → Pfad-Enumeration/Fuzzing. Die Pfadzahl zählt nur Pfade **mit** 4xx (ein legitimer Client, der viele Endpunkte bedient und nur auf einem 4xx sammelt, ist kein Scanner), und **ausgehende** HttpClient-Logs der App (`System.Net.Http.*`, tragen den Upstream-Statuscode + die IP des umgebenden Requests) sind komplett ausgeschlossen (`SECURITY_EXCLUDE_LOGGER_PREFIXES`) |
 | `auth_bruteforce` | high | eine Quell-IP sammelt viele abgelehnte Auth-Antworten (401/403) → möglicher Brute-Force/Credential-Stuffing |
 | `linux_ssh_bruteforce` | high | viele fehlgeschlagene SSH-Logins („Failed password"/„Invalid user") auf einem Host (Filebeat-/journald-Logs, `LINUX_INDICES`) — wird wie die Security-Signale IMMER alarmiert |
 | `linux_oom` | high | der Kernel-OOM-Killer hat auf einem Host zugeschlagen |
@@ -66,7 +66,9 @@ desselben Fensters aus; abschaltbar/justierbar über `SECURITY_*` (s.u.).
 
 Die Alarm-Mail wird als **HTML** (mit farbigen Severity-Badges + Level-Tabelle Aktuell-vs-Baseline) **plus Plaintext-Fallback** verschickt.
 
-**Kanäle:** E-Mail (SMTP) und/oder **Discord** (`DISCORD_WEBHOOK_URL` → farbiges Embed). Mindestens
+**Kanäle:** E-Mail (SMTP) und/oder **Discord** (`DISCORD_WEBHOOK_URL` → farbiges Embed;
+`DISCORD_MENTION_USER_ID` pingt diese User-ID bei **HIGH**-Alerts an — nur genau diese ID ist in
+`allowed_mentions` freigeschaltet, Log-Text kann weiterhin niemanden anpingen). Mindestens
 ein Kanal muss konfiguriert sein (außer `DRY_RUN=true`); Discord reicht auch allein. Alerts, Digest
 und die optionale Start-Meldung gehen an alle konfigurierten Kanäle.
 
@@ -97,7 +99,8 @@ Siehe `.env.example`. Wichtigste Werte:
 | `MIN_ERRORS` / `ERROR_SPIKE_FACTOR` | `5` / `3.0` | Spike-Schwellen |
 | `SECURITY_CHECK` | `true` | Security-Heuristik (API-Abklopfen erkennen) an/aus |
 | `SECURITY_MIN_SUSPICIOUS` | `3` | ab so vielen Treffern auf verdächtige Pfade (4xx/5xx) → `suspicious_requests` |
-| `SECURITY_SCAN_MIN_4XX` / `SECURITY_SCAN_MIN_PATHS` | `40` / `15` | `api_scan`: ab so vielen 4xx **und** so vielen verschiedenen Pfaden je Quell-IP |
+| `SECURITY_SCAN_MIN_4XX` / `SECURITY_SCAN_MIN_PATHS` | `40` / `15` | `api_scan`: ab so vielen 4xx **und** so vielen verschiedenen 4xx-Pfaden je Quell-IP |
+| `SECURITY_LOGGER_FIELD` / `SECURITY_EXCLUDE_LOGGER_PREFIXES` | `log.logger` / `System.Net.Http.` | Log-Einträge, deren Logger so beginnt, sind **ausgehende** HTTP-Aufrufe der App selbst und zählen in der Security-Wertung nicht als Client-Verhalten (leer = Ausschluss aus) |
 | `SECURITY_AUTH_FAIL_THRESHOLD` | `25` | ab so vielen 401/403 je Quell-IP → `auth_bruteforce` |
 | `SECURITY_AUTH_PATH_PREFIX` | `/api/auth` | zählt nur 401/403 auf diesem Pfad-Präfix (ein abgelaufenes Token auf normalen API-Pfaden ist kein Brute-Force); `/` = jeder Pfad |
 | `SECURITY_PATH_TOKENS` | (Default-Liste) | komma-getrennte Pfad-Substrings (case-insensitiv), die als verdächtig gelten; leer = eingebaute Liste |

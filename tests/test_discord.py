@@ -141,3 +141,52 @@ def test_validate_accepts_discord_only():
 def test_validate_requires_a_channel():
     cfg = Config()  # weder SMTP noch Discord, nicht dry_run
     assert any("Alert-Kanal" in e for e in cfg.validate())
+
+
+# ── HIGH-Alerts pingen den konfigurierten Benutzer ──
+
+def _mention_cfg(uid="728550010496745472"):
+    cfg = Config()
+    cfg.discord_mention_user_id = uid
+    return cfg
+
+
+def test_high_alert_pingt_konfigurierten_user():
+    a = {"severity": "high", "summary": "s", "llm_used": False}
+    p = discord_notify.build_alert_payload("subj", a, [], {"total": 1}, {"total": 1}, _mention_cfg())
+    assert p["content"] == "<@728550010496745472>"
+    # NUR diese ID darf pingen; parse bleibt leer, damit Log-Text niemanden anpingen kann.
+    assert p["allowed_mentions"] == {"parse": [], "users": ["728550010496745472"]}
+
+
+def test_high_mention_ueberlebt_post(monkeypatch):
+    sent = {}
+
+    def fake_urlopen(req, timeout=0):
+        sent["payload"] = json.loads(req.data.decode("utf-8"))
+        class R:
+            status = 204
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        return R()
+
+    monkeypatch.setattr(discord_notify.urllib.request, "urlopen", fake_urlopen)
+    a = {"severity": "high", "summary": "s", "llm_used": False}
+    p = discord_notify.build_alert_payload("subj", a, [], {"total": 1}, {"total": 1}, _mention_cfg())
+    discord_notify.post("https://discord.test/webhook", p)
+    # post() darf das explizite allowed_mentions nicht mit {parse: []} ueberschreiben.
+    assert sent["payload"]["allowed_mentions"] == {"parse": [], "users": ["728550010496745472"]}
+    assert sent["payload"]["content"] == "<@728550010496745472>"
+
+
+def test_medium_alert_pingt_nicht():
+    a = {"severity": "medium", "summary": "s", "llm_used": False}
+    p = discord_notify.build_alert_payload("subj", a, [], {"total": 1}, {"total": 1}, _mention_cfg())
+    assert "content" not in p
+    assert "allowed_mentions" not in p
+
+
+def test_high_ohne_konfigurierte_id_pingt_nicht():
+    a = {"severity": "high", "summary": "s", "llm_used": False}
+    p = discord_notify.build_alert_payload("subj", a, [], {"total": 1}, {"total": 1}, _mention_cfg(""))
+    assert "content" not in p and "allowed_mentions" not in p

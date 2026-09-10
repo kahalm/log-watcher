@@ -73,7 +73,10 @@ def evaluate_security(sec: dict, cfg) -> "list[Signal]":
     prefix = getattr(cfg, "security_auth_path_prefix", "") or ""
     for ip, st in sorted(by_ip.items(), key=lambda kv: kv[1].get("c4xx", 0), reverse=True):
         c4xx = int(st.get("c4xx", 0))
-        paths = int(st.get("distinct_paths", 0))
+        # Pfadzahl bevorzugt auf die 4xx gescoped (ein legitimer Client, der viele Endpunkte
+        # bedient und nur auf einem davon 4xx sammelt, ist kein Scanner). Fehlt der gescopte
+        # Wert (alte/fremde Aggregation), wie bisher der ungescopte — kein stilles 0.
+        paths = int(st.get("distinct_paths_4xx", st.get("distinct_paths", 0)))
         # Nur die auf die Auth-Endpunkte eingeschränkten Ablehnungen zählen — 401 auf
         # normalen API-Pfaden ist typischerweise ein legitimer Client mit abgelaufenem
         # Token (60s-Poll reißt jede Schwelle) und kein Angriff. Fehlt der gescopte

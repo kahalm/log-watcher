@@ -307,13 +307,25 @@ def test_index_silent_fires_for_whole_monthly_family_outage():
 
 
 def test_ignore_pattern_is_scrub_normalized():
-    # main.py redigiert die Templates VOR rules.evaluate — ein Ignore-Muster mit IP/E-Mail
-    # würde sonst nie greifen, weil im Template schon <ip> steht.
+    # main.py redigiert die Templates VOR rules.evaluate — ein Ignore-Muster mit
+    # OEFFENTLICHER IP/E-Mail würde sonst nie greifen, weil im Template schon <ip> steht.
+    c = _cfg()
+    c.scrub_pii = True
+    c.warn_spike_ignore = ["curl exited on 84.114.12.12"]
+    current = {"total": 5000, "levels": {"Warning": 47},
+               "error_messages": {"curl exited on <ip>": 44, "echtes problem": 3}}
+    baseline = {"total": 5000, "levels": {"Warning": 1}, "error_messages": {}}
+    assert "warn_spike" not in [s.kind for s in rules.evaluate(current, baseline, c)]
+
+
+def test_ignore_pattern_private_ip_bleibt_und_matcht():
+    # Seit v0.22.0 behaelt der Scrub private Adressen — Muster UND Template durchlaufen
+    # denselben Scrub, ein Ignore-Muster mit LAN-IP matcht also das unredigierte Template.
     c = _cfg()
     c.scrub_pii = True
     c.warn_spike_ignore = ["curl exited on 10.24.13.6"]
     current = {"total": 5000, "levels": {"Warning": 47},
-               "error_messages": {"curl exited on <ip>": 44, "echtes problem": 3}}
+               "error_messages": {"curl exited on 10.24.13.6": 44, "echtes problem": 3}}
     baseline = {"total": 5000, "levels": {"Warning": 1}, "error_messages": {}}
     assert "warn_spike" not in [s.kind for s in rules.evaluate(current, baseline, c)]
 

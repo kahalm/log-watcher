@@ -55,7 +55,16 @@ def build_alert_payload(subject: str, assessment, signals, current, baseline, cf
         # ES-Instanzen identische Index-Namen haben (prod vs. dev, beide rookhub-logs-*).
         "footer": {"text": f"{cfg.name} · {cfg.es_url}"[:2048]},
     }
-    return {"embeds": [embed]}
+    payload = {"embeds": [embed]}
+    # HIGH pingt den konfigurierten Benutzer — als content (Embeds pingen nie) und mit
+    # allowed_mentions, die NUR genau diese ID erlauben (parse bleibt leer): ein
+    # "@everyone"/"<@…>" aus Log-Text kann also weiterhin niemanden anpingen, und
+    # post() lässt dieses explizite allowed_mentions dank setdefault unangetastet.
+    mention = str(getattr(cfg, "discord_mention_user_id", "") or "")
+    if sev == "high" and mention:
+        payload["content"] = f"<@{mention}>"
+        payload["allowed_mentions"] = {"parse": [], "users": [mention]}
+    return payload
 
 
 def post(webhook_url: str, payload: dict) -> int:

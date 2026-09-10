@@ -148,3 +148,54 @@ def test_security_window_scopes_auth_agg_to_prefix():
     # ungescopter Zähler bleibt erhalten (Fallback/Transparenz)
     assert captured["body"]["aggs"]["by_ip"]["aggs"]["auth_fail"]["filter"] == {
         "terms": {"http.response.status_code": [401, 403]}}
+
+
+# ── api_scan: 4xx-gescopte Pfadzahl + Outbound-HttpClient-Ausschluss (Fall 09.09.2026) ──
+
+def test_api_scan_nutzt_4xx_gescopte_pfadzahl():
+    """Ein legitimer Client, der 27 Endpunkte bedient und nur auf EINEM davon 4xx sammelt
+    (Admin-Sweep mit toten Upstream-URLs), ist kein Scanner."""
+    sec = {"total_requests": 50000, "suspicious": {"count": 0, "paths": {}, "ips": {}},
+           "by_ip": {"::ffff:172.28.0.1": {
+               "total": 5000, "c4xx": 744, "auth_fail": 0,
+               "distinct_paths": 27, "distinct_paths_4xx": 1}}}
+    assert security.evaluate_security(sec, _cfg()) == []
+
+
+def test_api_scan_feuert_bei_vielen_4xx_pfaden():
+    sec = {"total_requests": 50000, "suspicious": {"count": 0, "paths": {}, "ips": {}},
+           "by_ip": {"45.9.1.2": {
+               "total": 900, "c4xx": 800, "auth_fail": 0,
+               "distinct_paths": 40, "distinct_paths_4xx": 38}}}
+    sigs = security.evaluate_security(sec, _cfg())
+    assert [s.kind for s in sigs] == ["api_scan"]
+    assert "38" in sigs[0].detail
+
+
+def test_api_scan_fallback_ohne_gescopte_pfadzahl():
+    """Alte/fremde Aggregation ohne distinct_paths_4xx -> ungescopter Zaehler wie bisher."""
+    sec = {"total_requests": 50000, "suspicious": {"count": 0, "paths": {}, "ips": {}},
+           "by_ip": {"45.9.1.2": {"total": 900, "c4xx": 800, "auth_fail": 0, "distinct_paths": 40}}}
+    assert [s.kind for s in security.evaluate_security(sec, _cfg())] == ["api_scan"]
+
+
+def test_security_window_query_schliesst_outbound_aus_und_scoped_pfade():
+    cfg = _cfg()
+    es = ESClient(cfg)
+    bodies = []
+    es._search = lambda body, index=None: bodies.append(body) or {}
+    es.security_window("2026-09-09T08:54:00Z", "2026-09-09T14:54:00Z")
+    q = bodies[0]["query"]["bool"]
+    assert q["must_not"] == [{"prefix": {"log.logger": {"value": "System.Net.Http."}}}]
+    c4xx = bodies[0]["aggs"]["by_ip"]["aggs"]["c4xx"]
+    assert c4xx["aggs"]["paths_4xx"] == {"cardinality": {"field": cfg.security_path_field}}
+
+
+def test_security_window_ohne_exclude_prefixe_kein_must_not():
+    cfg = _cfg()
+    cfg.security_exclude_logger_prefixes = []
+    es = ESClient(cfg)
+    bodies = []
+    es._search = lambda body, index=None: bodies.append(body) or {}
+    es.security_window("2026-09-09T08:54:00Z", "2026-09-09T14:54:00Z")
+    assert "must_not" not in bodies[0]["query"]["bool"]

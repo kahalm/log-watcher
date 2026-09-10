@@ -22,11 +22,18 @@ defaults:
   # security_scan_min_4xx: 40
   # security_scan_min_paths: 15
   # security_auth_fail_threshold: 25
+  # Ausgehende HttpClient-Logs der App (Logger-Praefix) zaehlen nicht als Client-Verhalten —
+  # sie tragen den Upstream-Statuscode plus IP/Pfad des umgebenden Requests (Fehlalarm-Falle).
+  # security_logger_field: log.logger
+  # security_exclude_logger_prefixes: [System.Net.Http.]
   # gemeinsamer Kanal-/State-/HTTP-Teil:
   # smtp_host: smtp.example.com
   # smtp_from: log-watcher@oberschmid.homes
   # smtp_to: [p.oberschmid@cp-solutions.at]
   discord_webhook_url: https://discord.com/api/webhooks/XXXX/YYYY
+  # Bei severity=high diese Discord-User-ID im Alert anpingen ("" = aus). Nur diese eine ID
+  # ist in allowed_mentions erlaubt — Mentions aus Log-Text bleiben tot.
+  # discord_mention_user_id: "123456789012345678"
   state_file: /data/state.json
   heartbeat_file: /data/heartbeat
   http_port: 8080

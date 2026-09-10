@@ -120,6 +120,12 @@ class Config:
     security_top_ips: int = field(default_factory=lambda: _int("SECURITY_TOP_IPS", 20))
     # Verdächtige Pfad-Substrings (case-insensitiv); leer = Default-Liste aus security.py.
     security_path_tokens: list = field(default_factory=lambda: _list("SECURITY_PATH_TOKENS", ""))
+    # AUSGEHENDE HTTP-Aufrufe der App selbst (HttpClient-Logs) tragen den Statuscode des
+    # UPSTREAMS plus IP/Pfad des umgebenden Requests — sie sind kein Client-Verhalten und
+    # werden über ihr Logger-Präfix aus der Security-Wertung ausgeschlossen (Fall 09.09.2026:
+    # 372 tote Upstream-URLs eines Admin-Sweeps sahen wie ein externer api_scan aus).
+    security_logger_field: str = field(default_factory=lambda: _str("SECURITY_LOGGER_FIELD", "log.logger"))
+    security_exclude_logger_prefixes: list = field(default_factory=lambda: _list("SECURITY_EXCLUDE_LOGGER_PREFIXES", "System.Net.Http."))
 
     # --- Linux-System-Heuristik (Filebeat/journald-Logs von Host + VMs) ---
     # Aktiv, sobald linux_indices gesetzt ist (z.B. [filebeat-*]). Feuert je Host bei
@@ -168,6 +174,9 @@ class Config:
 
     # --- Discord-Webhook (zusätzlicher/alternativer Kanal) ---
     discord_webhook_url: "str | None" = field(default_factory=lambda: _str("DISCORD_WEBHOOK_URL"))
+    # Diese Discord-User-ID wird bei severity=high im Alert angepingt ("" = aus). Nur genau
+    # diese ID kommt in allowed_mentions — Log-Text kann weiterhin niemanden anpingen.
+    discord_mention_user_id: str = field(default_factory=lambda: _str("DISCORD_MENTION_USER_ID", ""))
 
     # --- State / Dedupe ---
     state_file: str = field(default_factory=lambda: _str("STATE_FILE", "/data/state.json"))

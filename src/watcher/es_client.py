@@ -188,7 +188,12 @@ class ESClient:
             "by_ip": {
                 "terms": {"field": ip_f, "size": max(1, cfg.security_top_ips)},
                 "aggs": {
-                    "c4xx": {"filter": {"range": {status_f: {"gte": 400, "lt": 500}}}},
+                    # Pfad-Kardinalität zusätzlich auf die 4xx gescoped: „viele Pfade" muss
+                    # „viele FEHLGESCHLAGENE Pfade" heißen. Die ungescopte Zählung rechnete
+                    # alle Requests der IP mit — ein legitimer Client, der 27 Endpunkte
+                    # bedient und auf EINEM davon 4xx sammelt, sah wie ein Scanner aus.
+                    "c4xx": {"filter": {"range": {status_f: {"gte": 400, "lt": 500}}},
+                             "aggs": {"paths_4xx": {"cardinality": {"field": path_f}}}},
                     "auth_fail": {"filter": {"terms": {status_f: [401, 403]}}},
                     "auth_fail_scoped": {"filter": auth_scoped},
                     "distinct_paths": {"cardinality": {"field": path_f}},
@@ -209,9 +214,19 @@ class ESClient:
                     "ips": {"terms": {"field": ip_f, "size": 10}},
                 },
             }
+        query = {"bool": {"filter": [self._range(start_iso, end_iso), {"exists": {"field": status_f}}]}}
+        # Ausgehende HttpClient-Logs der App selbst (System.Net.Http.*) komplett aus dem
+        # Scope: sie tragen den Statuscode des UPSTREAMS und erben IP + url.path des
+        # umgebenden Requests — 372 tote Upstream-URLs eines einzelnen Admin-Requests
+        # zählten so als „744 4xx" des Aufrufers (Fehlalarm api_scan, 09.09.2026).
+        # Unmapptes Logger-Feld ist harmlos: prefix matcht dann nichts, must_not = no-op.
+        prefixes = [p for p in (getattr(cfg, "security_exclude_logger_prefixes", None) or []) if p]
+        if prefixes:
+            logger_f = getattr(cfg, "security_logger_field", "log.logger")
+            query["bool"]["must_not"] = [{"prefix": {logger_f: {"value": p}}} for p in prefixes]
         body = {
             "size": 0, "track_total_hits": True,
-            "query": {"bool": {"filter": [self._range(start_iso, end_iso), {"exists": {"field": status_f}}]}},
+            "query": query,
             "aggs": aggs,
         }
         try:
@@ -237,9 +252,10 @@ class ESClient:
         by_ip = {}
         for b in aggs.get("by_ip", {}).get("buckets", []):
             auth_fail = int(b.get("auth_fail", {}).get("doc_count", 0))
+            c4xx_agg = b.get("c4xx", {})
             entry = {
                 "total": b.get("doc_count", 0),
-                "c4xx": int(b.get("c4xx", {}).get("doc_count", 0)),
+                "c4xx": int(c4xx_agg.get("doc_count", 0)),
                 "auth_fail": auth_fail,
                 "distinct_paths": int(b.get("distinct_paths", {}).get("value", 0)),
             }
@@ -247,6 +263,8 @@ class ESClient:
             # security.py bewusst auf den ungescopten Zähler zurück (kein stilles 0).
             if "auth_fail_scoped" in b:
                 entry["auth_fail_scoped"] = int(b["auth_fail_scoped"].get("doc_count", 0))
+            if "paths_4xx" in c4xx_agg:
+                entry["distinct_paths_4xx"] = int(c4xx_agg["paths_4xx"].get("value", 0))
             by_ip[str(b["key"])] = entry
         return {"total_requests": total_count, "suspicious": suspicious, "by_ip": by_ip}
 
