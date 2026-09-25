@@ -61,6 +61,10 @@ targets:
     es_api_key: BASE64_API_KEY_HIER
     es_indices: [lernkompass-logs-*]
     min_errors: 10
+    # Kein eigener Heartbeat? Dann AUSDRUECKLICH leer setzen — sonst erbt das Target die
+    # ENV-Vorgabe HEARTBEAT_CHECKS (rookhub-api/-crawler/schach-bot) und meldet deren Ausfall
+    # unter eigenem Namen (ein Crawler-Ausfall = ein HIGH-Ping je Target).
+    heartbeat_checks: []
     alert_index_prefix: log-watcher-alerts
 
   # ── ES-Instanz C (Basic-Auth, saisonale Baseline) ──────────────────────────
@@ -70,6 +74,10 @@ targets:
     es_pass: CHANGEME
     es_indices: [piratechess-logs-*]
     baseline_mode: last_week
+    # Kein eigener Heartbeat? Dann AUSDRUECKLICH leer setzen — sonst erbt das Target die
+    # ENV-Vorgabe HEARTBEAT_CHECKS (rookhub-api/-crawler/schach-bot) und meldet deren Ausfall
+    # unter eigenem Namen (ein Crawler-Ausfall = ein HIGH-Ping je Target).
+    heartbeat_checks: []
     alert_index_prefix: log-watcher-alerts
     # ECS-Logs legen das Roh-Template unter labels.MessageTemplate ab (NICHT unter dem
     # Default messageTemplate.keyword) — ohne diese Zeile bleiben error_messages/Neu-

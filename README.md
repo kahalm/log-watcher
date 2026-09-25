@@ -94,7 +94,7 @@ Siehe `.env.example`. Wichtigste Werte:
 | `ES_INDICES` | `rookhub-logs-*,crawler-logs-*` | überwachte Index-Pattern |
 | `WINDOW_HOURS` / `INTERVAL_SECONDS` | `6` / `21600` | Fenstergröße / Prüfintervall |
 | `INDEX_SILENT_WINDOW_HOURS` | `24` | eigenes (größeres) Fenster nur für die Per-Index-Stille-Prüfung; vermeidet Fehlalarme bei bursty Low-Volume-Indizes (z.B. crawler-logs). `0` = aus |
-| `HEARTBEAT_CHECKS` | `rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,schach-bot=rookhub-logs-*=ClientLog heartbeat_bot` | erwartete Lebenszeichen als `name=index=phrase`-Tripel (komma-getrennt); `phrase` wird per `match_phrase` gegen das gerenderte Message-Feld geprüft |
+| `HEARTBEAT_CHECKS` | `rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,schach-bot=rookhub-logs-*=ClientLog heartbeat_bot` | erwartete Lebenszeichen als `name=index=phrase`-Tripel (komma-getrennt); `phrase` wird per `match_phrase` gegen das gerenderte Message-Feld geprüft. **Gilt für JEDES Target**, das in der `config.yaml` keine eigenen `heartbeat_checks` setzt — Targets ohne Heartbeat brauchen `heartbeat_checks: []` |
 | `HEARTBEAT_MAX_STALENESS_MINUTES` | `5` | kein passender Heartbeat in diesem Fenster → `heartbeat_missing`. `0` = Heartbeat-Prüfung aus |
 | `MIN_ERRORS` / `ERROR_SPIKE_FACTOR` | `5` / `3.0` | Spike-Schwellen |
 | `SECURITY_CHECK` | `true` | Security-Heuristik (API-Abklopfen erkennen) an/aus |
