@@ -520,6 +520,128 @@ def _maybe_llm_outage_warning(glob: Config, st: dict, now: datetime) -> None:
     state.save_state(glob.state_file, st)
 
 
+# Ab so vielen gescheiterten Zyklen in Folge warnt der Wächter: ein einzelner ES-Schluckauf
+# (Neustart, kurzer Timeout) ist im nächsten Zyklus vorbei und soll kein Warnung/Entwarnung-Paar
+# nach Discord schicken. Die All-is-well-Sperre greift dagegen schon beim ersten Fehlschlag.
+_OUTAGE_MIN_CYCLES = 2
+
+
+def _run_cycles(clients, now: datetime) -> dict:
+    """Ein Zyklus je Target. Liefert {target: None (geprüft) | Grund (gescheitert)}."""
+    results: dict = {}
+    for cfg, es in clients:
+        try:
+            run_cycle(cfg, es, now)
+            results[cfg.name] = None
+        except ESError as e:
+            METRICS.inc("es_errors_total")
+            log.error("ES-Fehler [%s]: %s", cfg.name, e)
+            results[cfg.name] = str(e)
+        except Exception as e:  # noqa: BLE001 — ein kaputtes Target darf die anderen nicht stoppen
+            log.exception("Unerwarteter Fehler im Zyklus [%s]", cfg.name)
+            results[cfg.name] = f"Unerwarteter Fehler: {type(e).__name__}: {e}"
+    return results
+
+
+def _record_cycle_results(glob: Config, st: dict, results: dict, now: datetime) -> None:
+    """Zyklus-Erfolg/-Fehlschlag je Target im Zustand festhalten (für Warnung und All-is-well)."""
+    now_ts = now.timestamp()
+    recovered = []
+    for name, reason in results.items():
+        if reason is None:
+            ended = state.record_cycle_ok(st, name, now_ts)
+            # Nur entwarnen, wenn auch gewarnt wurde.
+            if ended is not None and ended.get("notified_at") is not None:
+                recovered.append(name)
+        else:
+            state.record_cycle_failure(st, name, reason, now_ts)
+    if recovered:
+        prev = st.get("cycle_recovered")
+        st["cycle_recovered"] = (prev if isinstance(prev, list) else []) + recovered
+    state.save_state(glob.state_file, st)
+
+
+def _blind_targets(st: dict, targets, since_ts: float) -> list:
+    """Targets, die seit `since_ts` nicht erfolgreich geprüft wurden oder gerade scheitern."""
+    blind = []
+    for cfg in targets:
+        last_ok = state.last_cycle_ok(st, cfg.name)
+        if state.cycle_outage(st, cfg.name) is not None or last_ok is None or last_ok < since_ts:
+            blind.append(cfg.name)
+    return blind
+
+
+def _names_md(names) -> str:
+    """Target-Namen kommagetrennt, Markdown-escapt (Namen stammen aus der config.yaml)."""
+    return ", ".join(discord_notify.escape_markdown(str(n)) for n in names)
+
+
+def _maybe_cycle_outage_warning(glob: Config, targets, st: dict, now: datetime) -> None:
+    """Warnt, solange Targets nicht geprüft werden können (ES weg, Zyklus scheitert).
+
+    Eine Sammelmeldung mit einer Zeile je Elasticsearch statt einer Meldung je Target — hängen
+    acht Targets an derselben ES, wären acht Warnungen genau der Lärm, der echte übertönt.
+    """
+    if not glob.discord_webhook_url:
+        return
+
+    recovered = st.pop("cycle_recovered", None)
+    if isinstance(recovered, list) and recovered:
+        msg = ("✅ **Log-Wächter prüft wieder:** "
+               + _names_md(sorted(set(str(n) for n in recovered))) + ".")
+        if glob.dry_run:
+            log.info("DRY_RUN: Zyklus-Entwarnung: %s", msg)
+        else:
+            try:
+                discord_notify.post_text(glob.discord_webhook_url, msg)
+                log.info("Zyklus-Entwarnung an Discord gesendet.")
+            except Exception as e:  # noqa: BLE001
+                log.error("Zyklus-Entwarnung an Discord fehlgeschlagen: %s", e)
+        state.save_state(glob.state_file, st)
+
+    now_ts = now.timestamp()
+    every = glob.es_outage_notice_hours * 3600
+    groups: dict = {}   # es_url -> [(name, outage)]
+    for cfg in targets:
+        outage = state.cycle_outage(st, cfg.name)
+        if outage is None or int(outage.get("cycles", 0) or 0) < _OUTAGE_MIN_CYCLES:
+            continue
+        last = outage.get("notified_at")
+        if isinstance(last, (int, float)) and (now_ts - last) < every:
+            continue
+        groups.setdefault(cfg.es_url, []).append((cfg.name, outage))
+    if not groups:
+        return
+
+    lines = []
+    for members in groups.values():
+        names = _names_md([n for n, _ in members])
+        oldest = min(members, key=lambda m: m[1].get("since", now_ts))[1]
+        newest = max(members, key=lambda m: m[1].get("last_seen", 0))[1]
+        reason = discord_notify.escape_markdown(str(newest.get("reason", "Zyklus scheitert"))[:200])
+        lines.append(f"> **{names}** ({_outage_age(oldest, now)}): {reason}")
+    msg = ("⚠️ **Log-Wächter blind: Prüfzyklus scheitert.**\n"
+           + "\n".join(lines) + "\n\n"
+           "Diese Targets werden gerade **nicht geprüft** — kein Alarm heißt hier nicht „alles ruhig“, "
+           "und die tägliche Alles-in-Ordnung-Meldung bleibt aus, solange das so ist.\n"
+           "→ Elasticsearch prüfen, dann `docker logs log-watcher`.")
+
+    if glob.dry_run:
+        log.warning("DRY_RUN: Zyklus-Ausfall-Warnung: %s", msg)
+    else:
+        try:
+            discord_notify.post_text(glob.discord_webhook_url, msg)
+            log.warning("Zyklus-Ausfall-Warnung an Discord gesendet (%s).",
+                        [n for members in groups.values() for n, _ in members])
+        except Exception as e:  # noqa: BLE001
+            log.error("Zyklus-Ausfall-Warnung an Discord fehlgeschlagen: %s", e)
+            return   # nicht als gemeldet verbuchen, dann greift der naechste Zyklus
+    for members in groups.values():
+        for _, outage in members:
+            outage["notified_at"] = now_ts
+    state.save_state(glob.state_file, st)
+
+
 def _maybe_alliswell(glob: Config, targets, st: dict, now: datetime) -> None:
     if not glob.alliswell_enabled or not glob.discord_webhook_url:
         return
@@ -539,6 +661,13 @@ def _maybe_alliswell(glob: Config, targets, st: dict, now: datetime) -> None:
     if now.hour < glob.alliswell_hour:
         return
     if _any_recent_alert(st, targets, now.timestamp() - 86400):
+        return
+    # Kein „alles in Ordnung“, wenn ein Target in den letzten 24 h nicht erfolgreich geprüft
+    # wurde oder gerade scheitert (ES weg): dann hat der Wächter nicht nachgesehen. Gewarnt
+    # hat _maybe_cycle_outage_warning; der Tag bleibt offen, nach der Erholung kommt die Meldung.
+    blind = _blind_targets(st, targets, now.timestamp() - 86400)
+    if blind:
+        log.info("All-is-well unterdrueckt: nicht geprueft: %s", blind)
         return
     msg = f"🕗 Zwei Uhr und alles in Ordnung!\n> {_ALLISWELL_QUOTE}\n\n✅ Keine Auffälligkeiten in den letzten 24 h."
     if glob.dry_run:
@@ -629,18 +758,13 @@ def main() -> int:
     while not _stop.is_set():
         cycle_now = datetime.now(timezone.utc)
         _report_build_to_rookhub()   # je Zyklus erneut melden (überlebt rookhub-api-Neustarts)
-        for cfg, es in clients:
-            try:
-                run_cycle(cfg, es, cycle_now)
-            except ESError as e:
-                METRICS.inc("es_errors_total")
-                log.error("ES-Fehler [%s]: %s", cfg.name, e)
-            except Exception:
-                log.exception("Unerwarteter Fehler im Zyklus [%s]", cfg.name)
+        results = _run_cycles(clients, cycle_now)
         try:
             shared_st = state.load_state(glob.state_file)
+            _record_cycle_results(glob, shared_st, results, cycle_now)
             _maybe_digest(glob, clients, shared_st, cycle_now)
             _maybe_llm_outage_warning(glob, shared_st, cycle_now)
+            _maybe_cycle_outage_warning(glob, [cfg for cfg, _ in clients], shared_st, cycle_now)
             _maybe_alliswell(glob, [cfg for cfg, _ in clients], shared_st, cycle_now)
         except Exception:
             log.exception("Digest/All-is-well fehlgeschlagen")

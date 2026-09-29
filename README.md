@@ -116,6 +116,7 @@ Siehe `.env.example`. Wichtigste Werte:
 | `ANTHROPIC_API_KEY` | – | optional; ohne → rein regelbasiert |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | günstiges Monitoring-Modell |
 | `LLM_OUTAGE_NOTICE_HOURS` | `24` | Abstand der Discord-**Warnung**, solange der LLM-Aufruf scheitert (leeres Guthaben, abgelehnter Schlüssel, Drosselung). Der Zyklus läuft dabei regelbasiert weiter, und die tägliche „alles in Ordnung"-Meldung bleibt aus — sie würde behaupten, es habe jemand nachgesehen. `0` = jeden Zyklus warnen |
+| `ES_OUTAGE_NOTICE_HOURS` | `24` | Abstand der Discord-Warnung „Log-Wächter blind", solange der Zyklus eines Targets scheitert (ES nicht erreichbar, unerwartete Ausnahme). Gewarnt wird ab dem **zweiten** gescheiterten Zyklus in Folge, als **eine** Sammelmeldung mit einer Zeile je Elasticsearch; nach der Erholung kommt eine Entwarnung. Die tägliche „alles in Ordnung"-Meldung bleibt aus, solange ein Target scheitert oder in den letzten 24 h nicht erfolgreich geprüft wurde |
 | `SMTP_*` | – | Mailversand (Pflicht außer `DRY_RUN=true`) |
 | `COOLDOWN_HOURS` | `12` | gleiche Auffälligkeit nicht öfter melden (Signatur über die Signal-Details **ohne** die Fenster-Zähler; der Cooldown wird erst gestempelt, wenn mindestens ein Kanal die Zustellung geschafft hat) |
 | `DRY_RUN` | `false` | keine Mail, nur loggen (zum Einrichten) |

@@ -64,7 +64,8 @@ def test_alliswell_posts_if_alert_older_than_24h():
     now = _now(8)
     old_ts = now.timestamp() - 86401  # 24h+1s ago
     targets = [glob]
-    st = {"targets": {"test": {"alerts": {"abc123": old_ts}}}}
+    # last_ok: das Target wurde im letzten Zyklus erfolgreich geprüft (sonst bleibt All-is-well aus).
+    st = {"targets": {"test": {"alerts": {"abc123": old_ts}, "last_ok": now.timestamp() - 600}}}
     with patch("watcher.main.discord_notify.post_text") as mock_post, \
          patch("watcher.main.state.save_state"):
         _maybe_alliswell(glob, targets, st, now)

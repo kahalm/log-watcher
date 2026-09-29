@@ -153,6 +153,43 @@ def clear_llm_outage(state: dict) -> dict | None:
     return state.pop("llm_outage", None)
 
 
+# --- Zyklus-Erfolg je Target (ES weg, Zyklus scheitert) ---
+# Ein gescheiterter Zyklus ist NICHT „keine Auffälligkeit": der Wächter hat nicht nachgesehen.
+# Deshalb merkt sich der Zustand je Target den letzten erfolgreichen Zyklus und einen laufenden
+# Ausfall — die All-is-well-Meldung darf nur kommen, wenn wirklich geprüft wurde.
+def record_cycle_ok(state: dict, target: str, now: float) -> "dict | None":
+    """Merkt einen erfolgreichen Zyklus; beendet einen laufenden Ausfall und gibt ihn zurück."""
+    t = _target(state, target)
+    t["last_ok"] = now
+    ended = t.pop("outage", None)
+    return ended if isinstance(ended, dict) else None
+
+
+def record_cycle_failure(state: dict, target: str, reason: str, now: float) -> dict:
+    """Merkt einen gescheiterten Zyklus. `since` bleibt die ERSTE Beobachtung, `cycles` zählt mit."""
+    t = _target(state, target)
+    outage = t.get("outage")
+    if not isinstance(outage, dict) or "since" not in outage:
+        outage = {"since": now, "cycles": 0}
+    outage["reason"] = reason
+    outage["last_seen"] = now
+    outage["cycles"] = int(outage.get("cycles", 0) or 0) + 1
+    t["outage"] = outage
+    return state
+
+
+def cycle_outage(state: dict, target: str) -> "dict | None":
+    """Der laufende Zyklus-Ausfall eines Targets, oder None."""
+    outage = state.get("targets", {}).get(target, {}).get("outage")
+    return outage if isinstance(outage, dict) else None
+
+
+def last_cycle_ok(state: dict, target: str) -> "float | None":
+    """Zeitpunkt des letzten erfolgreichen Zyklus eines Targets, oder None."""
+    v = state.get("targets", {}).get(target, {}).get("last_ok")
+    return v if isinstance(v, (int, float)) else None
+
+
 # --- LLM-Tagesbudget (Feature 11), global ---
 def llm_calls_remaining(state: dict, day: str, max_calls: int) -> int:
     b = state.get("llm_budget", {})

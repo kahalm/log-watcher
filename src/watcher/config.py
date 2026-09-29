@@ -206,6 +206,9 @@ class Config:
     # Einmal am Tag: der Ausfall dauert, bis jemand etwas tut — jeder Zyklus (10 min) wäre Lärm,
     # und Lärm ist genau der Grund, warum eine echte Warnung übersehen wird.
     llm_outage_notice_hours: int = field(default_factory=lambda: _int("LLM_OUTAGE_NOTICE_HOURS", 24))
+    # Dasselbe für Targets, deren Zyklus scheitert (ES nicht erreichbar, unerwartete Ausnahme):
+    # „Wächter blind"-Warnung ab dem zweiten gescheiterten Zyklus in Folge, dann in diesem Abstand.
+    es_outage_notice_hours: int = field(default_factory=lambda: _int("ES_OUTAGE_NOTICE_HOURS", 24))
 
     # --- Sonstiges ---
     dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))
