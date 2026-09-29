@@ -80,17 +80,19 @@ class ESClient:
         }
         total_only = {"size": 0, "track_total_hits": True, "query": q}
 
-        for body, note in ((full, None),
-                           (levels_only, "Fallback ohne Top-Messages (Feld nicht aggregierbar?)"),
-                           (total_only, "Fallback nur Gesamtzahl (Level-Aggregation nicht möglich?)")):
+        # note = was wegfällt, wenn GENAU DIESE Stufe scheitert. Früher hing der Hinweis an der
+        # Folgestufe: die volle Aggregation (message_field als text gemappt -> 400) fiel ohne
+        # jedes Log weg, und „ohne Top-Messages" erschien erst, wenn schon die Levels scheiterten.
+        for body, note in ((full, "Fallback ohne Top-Messages (Feld nicht aggregierbar?)"),
+                           (levels_only, "Fallback nur Gesamtzahl (Level-Aggregation nicht möglich?)"),
+                           (total_only, "auch die Gesamtzahl scheitert — Fenster gilt als leer")):
             try:
                 return self._parse(self._search(body))
             except ESError as e:
                 if e.status is None or e.status >= 500:
                     raise  # Verbindungs-/Serverfehler -> nicht durch Feld-Fallback heilbar
-                if note:
-                    log.warning("Aggregation reduziert (%s): %s", note, e)
-        # unerreichbar, aber zur Sicherheit:
+                log.warning("Aggregation reduziert (%s): %s", note, e)
+        # Alle drei Stufen mit 4xx gescheitert:
         return {"total": 0, "levels": {}, "error_messages": {}}
 
     def fetch_samples(self, start_iso: str, end_iso: str, size: int, field: str) -> list:

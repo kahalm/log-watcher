@@ -132,6 +132,34 @@ def _warn_if_ignore_degraded(window: dict, cfg, pats: "list[str]") -> None:
     log.warning("WARN_SPIKE_IGNORE greift evtl. nicht [%s]: %s.", key[0], reason)
 
 
+# Targets, für die „keine Message-Templates" schon gemeldet ist — einmal je Target, nicht je Zyklus.
+_templates_missing_warned: set = set()
+
+
+def warn_if_templates_missing(window: dict, cfg, prefix: str = "") -> bool:
+    """Warnt (einmal je Target), wenn das Fenster Fehler/Warnungen zählt, die Template-
+    Aggregation aber leer ist.
+
+    Dann ist `message_field` falsch (nicht gemappt -> 200 mit leeren Buckets) oder nicht
+    aggregierbar (Fallback-Leiter), und new_errors, die Top-Fehler in Alert/Digest und
+    warn_spike_ignore sind wirkungslos — ohne diese Warnung merkt das niemand. Liefert True,
+    wenn gewarnt wurde. Liefert die Aggregation wieder Templates, ist die Warnung neu scharf.
+    """
+    name = getattr(cfg, "name", "default")
+    if window.get("error_messages"):
+        _templates_missing_warned.discard(name)
+        return False
+    n = _count_levels(window.get("levels") or {}, list(cfg.error_levels) + list(cfg.warn_levels))
+    if n <= 0 or name in _templates_missing_warned:
+        return False
+    _templates_missing_warned.add(name)
+    log.warning("%s%s Fehler/Warnungen im Fenster, aber keine Message-Templates [%s] — "
+                "message_field '%s' prüfen (ECS: labels.MessageTemplate). Ohne Templates bleiben "
+                "new_errors und die Top-Fehler in Alert/Digest stumm.",
+                prefix, n, name, getattr(cfg, "message_field", "?"))
+    return True
+
+
 def evaluate(current: dict, baseline: dict, cfg, known_fingerprints=None) -> "list[Signal]":
     signals: list[Signal] = []
     cur_err = _count_levels(current["levels"], cfg.error_levels)

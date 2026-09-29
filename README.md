@@ -92,6 +92,7 @@ Siehe `.env.example`. Wichtigste Werte:
 |----------|---------|-------|
 | `ES_URL` | `http://elasticsearch:9200` | Elasticsearch |
 | `ES_INDICES` | `rookhub-logs-*,crawler-logs-*` | überwachte Index-Pattern |
+| `ES_LEVEL_FIELD` / `ES_MESSAGE_FIELD` | `log.level` / `labels.MessageTemplate` | keyword-Felder für Level und Roh-Template (ECS, `schema/logging-schema.md`); alter Serilog.Sinks.Elasticsearch-Sink: `level.keyword` / `messageTemplate.keyword`. Zählt ein Fenster Fehler/Warnungen, aber keine Templates, warnt der Watcher einmal je Target im Log — dann sind `new_errors` und die Top-Fehler stumm |
 | `WINDOW_HOURS` / `INTERVAL_SECONDS` | `6` / `21600` | Fenstergröße / Prüfintervall |
 | `INDEX_SILENT_WINDOW_HOURS` | `24` | eigenes (größeres) Fenster nur für die Per-Index-Stille-Prüfung; vermeidet Fehlalarme bei bursty Low-Volume-Indizes (z.B. crawler-logs). `0` = aus |
 | `HEARTBEAT_CHECKS` | `rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,schach-bot=rookhub-logs-*=ClientLog heartbeat_bot` | erwartete Lebenszeichen als `name=index=phrase`-Tripel (komma-getrennt); `phrase` wird per `match_phrase` gegen das gerenderte Message-Feld geprüft. **Gilt für JEDES Target**, das in der `config.yaml` keine eigenen `heartbeat_checks` setzt — Targets ohne Heartbeat brauchen `heartbeat_checks: []` |
@@ -137,8 +138,10 @@ ES_URL=http://localhost:9200 SELFTEST=true PYTHONPATH=src python -m watcher.main
 
 ## Betrieb
 - **Robustheit:** Stimmt ein Feldname nicht (z.B. `ES_MESSAGE_FIELD`), reduziert sich die
-  Aggregation automatisch (volle Aggregation → nur Levels → nur Total) statt auszufallen;
-  beim Start läuft eine **Probe**, die fehlende Logs/Felder sofort als WARN meldet.
+  Aggregation automatisch (volle Aggregation → nur Levels → nur Total) statt auszufallen, und
+  jede Stufe loggt, was dabei wegfällt; beim Start läuft eine **Probe**, die fehlende Logs/Felder
+  sofort als WARN meldet — auch Fehler/Warnungen ohne Message-Templates (falsches
+  `ES_MESSAGE_FIELD`: nicht gemappt liefert ES leere Buckets statt eines Fehlers).
 - **Healthcheck:** Der Loop schreibt regelmäßig einen Heartbeat; der Docker-Healthcheck
   (`healthcheck.py`) meldet `unhealthy`, wenn der Heartbeat veraltet ist.
 - **Sauberes Herunterfahren:** `SIGTERM`/`SIGINT` brechen den langen Schlaf sofort ab

@@ -105,6 +105,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     base_start, base_end = _baseline_window(cfg, now, win)
     current = es.aggregate_window(_iso(now - win), _iso(now))
     baseline = es.aggregate_window(_iso(base_start), _iso(base_end))
+    rules.warn_if_templates_missing(current, cfg)
 
     # PII/Secrets aus den Message-Templates entfernen, bevor sie in LLM/Mail/ES gehen (Feature 19).
     if cfg.scrub_pii:
@@ -309,6 +310,7 @@ def startup_probe(cfg: Config, es: ESClient, now: datetime) -> None:
                         sample["total"], cfg.level_field)
         else:
             log.info("Startup-Probe ok: total=%s levels=%s", sample["total"], sample["levels"])
+            rules.warn_if_templates_missing(sample, cfg, "Startup-Probe: ")
     except ESError as e:
         log.error("Startup-Probe: ES nicht erreichbar (%s) — versuche es im Loop weiter.", e)
 

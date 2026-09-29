@@ -79,9 +79,10 @@ targets:
     # unter eigenem Namen (ein Crawler-Ausfall = ein HIGH-Ping je Target).
     heartbeat_checks: []
     alert_index_prefix: log-watcher-alerts
-    # ECS-Logs legen das Roh-Template unter labels.MessageTemplate ab (NICHT unter dem
-    # Default messageTemplate.keyword) — ohne diese Zeile bleiben error_messages/Neu-
-    # Signatur-Erkennung UND der warn_spike_ignore-Abgleich leer.
+    # ECS-Logs legen das Roh-Template unter labels.MessageTemplate ab (= Code-Default; hier
+    # ausdrücklich, weil ES_MESSAGE_FIELD aus der .env sonst jedes Target überstimmt) — mit
+    # falschem Feld bleiben error_messages/Neu-Signatur-Erkennung UND der
+    # warn_spike_ignore-Abgleich leer.
     message_field: labels.MessageTemplate
     # By-design-WARN-Templates aus dem warn_spike-Count herausrechnen, damit sie keine
     # Fehlalarme auslösen:

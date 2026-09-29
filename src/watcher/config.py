@@ -52,8 +52,10 @@ class Config:
     es_user: "str | None" = field(default_factory=lambda: _str("ES_USER"))
     es_pass: "str | None" = field(default_factory=lambda: _str("ES_PASSWORD"))
     timestamp_field: str = field(default_factory=lambda: _str("ES_TIMESTAMP_FIELD", "@timestamp"))
-    level_field: str = field(default_factory=lambda: _str("ES_LEVEL_FIELD", "level.keyword"))
-    message_field: str = field(default_factory=lambda: _str("ES_MESSAGE_FIELD", "messageTemplate.keyword"))
+    # Defaults nach dem zentralen ECS-Schema (schema/logging-schema.md). Alter
+    # Serilog.Sinks.Elasticsearch-Sink: level.keyword / messageTemplate.keyword.
+    level_field: str = field(default_factory=lambda: _str("ES_LEVEL_FIELD", "log.level"))
+    message_field: str = field(default_factory=lambda: _str("ES_MESSAGE_FIELD", "labels.MessageTemplate"))
     error_levels: list = field(default_factory=lambda: _list("ES_ERROR_LEVELS", "Error,Fatal"))
     warn_levels: list = field(default_factory=lambda: _list("ES_WARN_LEVELS", "Warning"))
     # Alerts zur Kibana-Historie zurück nach ES schreiben:

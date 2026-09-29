@@ -105,3 +105,41 @@ def test_count_connection_error_raises(monkeypatch):
         assert False, "ESError erwartet — sonst meldet die Heartbeat-Prüfung alle Dienste als tot"
     except ESError as e:
         assert e.status is None
+
+
+# ── Hinweis an der richtigen Stufe (Fund S5-006) ──
+# Früher hing der Hinweis an der Folgestufe: scheiterte nur die volle Aggregation
+# (message_field als text gemappt -> 400), fiel sie ohne jedes Log weg.
+
+def test_failed_full_aggregation_is_logged_as_missing_top_messages(caplog):
+    c = _client()
+
+    def fake_search(body):
+        if "errors" in body.get("aggs", {}):
+            raise ESError("illegal_argument: field not aggregatable", status=400)
+        return {"hits": {"total": {"value": 42}},
+                "aggregations": {"by_level": {"buckets": [{"key": "Error", "doc_count": 7}]}}}
+
+    c._search = fake_search
+    with caplog.at_level("WARNING", logger="log-watcher"):
+        c.aggregate_window("a", "b")
+    msgs = [r.getMessage() for r in caplog.records]
+    assert len(msgs) == 1
+    assert "ohne Top-Messages" in msgs[0]
+
+
+def test_failed_level_aggregation_is_logged_as_total_only(caplog):
+    c = _client()
+
+    def fake_search(body):
+        if "aggs" in body:
+            raise ESError("illegal_argument: level field", status=400)
+        return {"hits": {"total": {"value": 5}}}
+
+    c._search = fake_search
+    with caplog.at_level("WARNING", logger="log-watcher"):
+        c.aggregate_window("a", "b")
+    msgs = [r.getMessage() for r in caplog.records]
+    assert len(msgs) == 2
+    assert "ohne Top-Messages" in msgs[0]
+    assert "nur Gesamtzahl" in msgs[1]
