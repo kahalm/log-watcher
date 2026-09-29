@@ -9,6 +9,8 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
+import requests
+
 from . import __version__
 from .config import Config, load_targets
 from .es_client import ESClient, ESError
@@ -527,8 +529,31 @@ def _maybe_llm_outage_warning(glob: Config, st: dict, now: datetime) -> None:
 _OUTAGE_MIN_CYCLES = 2
 
 
+def _cycle_failure_reason(e: BaseException) -> str:
+    """Grund eines gescheiterten Zyklus für State und Discord-Warnung — ohne Host, Port, URL.
+
+    str(ESError) trägt bei einem Verbindungsfehler die requests-Meldung samt
+    ``HTTPConnectionPool(host='<ES-IP>', port=9200) … url: /<indizes>/_search``; die interne
+    ES-Adresse hat im Discord-Kanal (Drittanbieter) nichts verloren. Der volle Text steht im Log.
+    """
+    if isinstance(e, ESError):
+        if e.status is not None:
+            return f"ES HTTP {e.status}"
+        cause = e.__cause__
+        if cause is None:
+            return "ES nicht erreichbar"   # ESError-Vertrag: status None = Verbindungsfehler
+        if isinstance(cause, requests.RequestException):
+            return f"ES nicht erreichbar ({type(cause).__name__})"
+        return f"ES-Fehler ({type(cause).__name__})"
+    return f"Unerwarteter Fehler: {type(e).__name__}"
+
+
 def _run_cycles(clients, now: datetime) -> dict:
-    """Ein Zyklus je Target. Liefert {target: None (geprüft) | Grund (gescheitert)}."""
+    """Ein Zyklus je Target. Liefert {target: None (geprüft) | Grund (gescheitert)}.
+
+    Der Grund landet im State und in der Discord-Warnung, darum ohne ES-Adresse
+    (_cycle_failure_reason); die volle Fehlermeldung geht nur ins Log.
+    """
     results: dict = {}
     for cfg, es in clients:
         try:
@@ -537,10 +562,10 @@ def _run_cycles(clients, now: datetime) -> dict:
         except ESError as e:
             METRICS.inc("es_errors_total")
             log.error("ES-Fehler [%s]: %s", cfg.name, e)
-            results[cfg.name] = str(e)
+            results[cfg.name] = _cycle_failure_reason(e)
         except Exception as e:  # noqa: BLE001 — ein kaputtes Target darf die anderen nicht stoppen
             log.exception("Unerwarteter Fehler im Zyklus [%s]", cfg.name)
-            results[cfg.name] = f"Unerwarteter Fehler: {type(e).__name__}: {e}"
+            results[cfg.name] = _cycle_failure_reason(e)
     return results
 
 

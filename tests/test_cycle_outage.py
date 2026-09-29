@@ -4,14 +4,19 @@ Szenario: rookhub-es ist über Nacht weg. Jeder Zyklus: aggregate_window wirft E
 Hauptschleife loggte das nur. Um 08:00 UTC ging trotzdem „Zwei Uhr und alles in Ordnung ...
 Keine Auffälligkeiten in den letzten 24 h" nach Discord — obwohl keine einzige Prüfung lief.
 """
+import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import requests
+from urllib3.connectionpool import HTTPConnectionPool
+from urllib3.exceptions import MaxRetryError, NewConnectionError
+
 from watcher import state
 from watcher.config import Config
-from watcher.es_client import ESError
-from watcher.main import (_maybe_alliswell, _maybe_cycle_outage_warning, _record_cycle_results,
-                          _run_cycles)
+from watcher.es_client import ESClient, ESError
+from watcher.main import (_cycle_failure_reason, _maybe_alliswell, _maybe_cycle_outage_warning,
+                          _record_cycle_results, _run_cycles)
 
 
 def _now(hour=8, minute=0):
@@ -180,3 +185,76 @@ def test_alliswell_needs_a_successful_check_within_24h(tmp_path):
         _maybe_alliswell(glob, [glob], {"targets": {"rookhub-prod": {
             "last_ok": now.timestamp() - 600}}}, now)
         post.assert_called_once()
+
+
+# --- Keine ES-Adresse in Discord (Nacharbeit S5-005) -----------------------------------------
+# str(ESError) trägt bei einem Verbindungsfehler die requests-Meldung samt
+# „HTTPConnectionPool(host='10.24.13.6', port=9200) … url: /…/_search". Die übersteht
+# escape_markdown und [:200] und stand damit in der Warnung „Log-Wächter blind".
+
+def _real_connection_error():
+    """Genau das, was requests bei abgelehnter Verbindung zur ES wirft."""
+    pool = HTTPConnectionPool("10.24.13.6", 9200)
+    cause = NewConnectionError(
+        None, "Failed to establish a new connection: [Errno 111] Connection refused")
+    return requests.exceptions.ConnectionError(
+        MaxRetryError(pool, "/rookhub-logs-*,piratechess-logs-*/_search", cause))
+
+
+def test_blind_warning_does_not_post_the_es_address(tmp_path, caplog):
+    glob = _cfg("rookhub-prod", tmp_path=tmp_path)
+    err = _real_connection_error()
+    assert "10.24.13.6" in str(err)            # Vorbedingung: die Meldung trägt den Host
+    clients = [(glob, ESClient(glob))]          # echter ES-Client -> echter ESError-Text
+    st = {}
+    with patch("watcher.es_client.requests.post", side_effect=err), \
+         patch("watcher.main.discord_notify.post_text") as post, \
+         caplog.at_level(logging.ERROR, logger="watcher.main"):
+        _cycle(clients, st, _now(7, 50), glob)
+        _cycle(clients, st, _now(8, 0), glob)
+
+    texts = _texts(post)
+    assert len(texts) == 1 and "blind" in texts[0]
+    msg = texts[0]
+    assert "ES nicht erreichbar (ConnectionError)" in msg
+    for leak in ("10.24.13.6", "9200", "HTTPConnectionPool", "_search", "rookhub-logs"):
+        assert leak not in msg, leak
+    # Auch der State (Quelle der Warnung) trägt keine Adresse ...
+    assert "10.24.13.6" not in state.cycle_outage(st, "rookhub-prod")["reason"]
+    # ... der volle Text bleibt im Log zur Diagnose.
+    assert any("10.24.13.6" in r.getMessage() for r in caplog.records)
+
+
+def test_blind_warning_names_http_status_without_response_body(tmp_path):
+    glob = _cfg("rookhub-prod", tmp_path=tmp_path)
+    resp = requests.Response()
+    resp.status_code = 503
+    resp.reason = "Service Unavailable"
+    resp.url = "http://10.24.13.6:9200/rookhub-logs-*/_search"
+    resp._content = b'{"error":{"reason":"node 10.24.13.6:9300 not available"},"status":503}'
+    clients = [(glob, ESClient(glob))]
+    st = {}
+    with patch("watcher.es_client.requests.post", return_value=resp), \
+         patch("watcher.main.discord_notify.post_text") as post:
+        _cycle(clients, st, _now(7, 50), glob)
+        _cycle(clients, st, _now(8, 0), glob)
+
+    msg = _texts(post)[0]
+    assert "ES HTTP 503" in msg
+    assert "10.24.13.6" not in msg and "not available" not in msg
+
+
+def test_failure_reason_never_carries_the_exception_text():
+    conn = ESError("ES nicht erreichbar: HTTPConnectionPool(host='10.24.13.6', port=9200)")
+    try:
+        raise conn from requests.exceptions.ReadTimeout("10.24.13.6:9200 read timed out")
+    except ESError as e:
+        assert _cycle_failure_reason(e) == "ES nicht erreichbar (ReadTimeout)"
+    try:
+        raise ESError("ES _count: unlesbare Antwort: …") from ValueError("Expecting value")
+    except ESError as e:
+        assert _cycle_failure_reason(e) == "ES-Fehler (ValueError)"
+    assert _cycle_failure_reason(ESError("ES HTTP 400: {…}", status=400)) == "ES HTTP 400"
+    assert _cycle_failure_reason(ESError("ES nicht erreichbar: x")) == "ES nicht erreichbar"
+    assert (_cycle_failure_reason(RuntimeError("connect to 10.24.13.6:9200 failed"))
+            == "Unerwarteter Fehler: RuntimeError")

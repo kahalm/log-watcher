@@ -26,7 +26,8 @@ def test_defaults_send_templates_and_match_heartbeats_on_the_rendered_message(mo
     assert cfg.heartbeat_field == "message"
 
 
-def test_heartbeat_query_uses_its_own_field_not_the_sample_field():
+def test_heartbeat_query_uses_its_own_field_not_the_sample_field(monkeypatch):
+    monkeypatch.delenv("HEARTBEAT_FIELD", raising=False)
     cfg = Config()
     cfg.sample_field = "labels.MessageTemplate"
     cfg.heartbeat_checks = ["rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api"]
