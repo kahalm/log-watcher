@@ -155,6 +155,8 @@ ES_URL=http://localhost:9200 SELFTEST=true PYTHONPATH=src python -m watcher.main
 
 ## CI / Deploy (tag-gated, wie die übrigen Repos)
 - Push auf `main` → Build `:dev`. Git-Tag `vX.Y.Z` → Build `:latest` + `:X.Y.Z` (Watchtower zieht `:latest`).
+  Andere Tags (z. B. `vorher-umbau`, `v1.2.3-rc1`) lösen keinen Build aus; ein `vX.Y.Z`-Tag, dessen Commit nicht
+  auf `main` liegt, bricht vor dem Push ab (kein Branch-Stand als `:latest`).
 - Tests laufen via GitHub Actions (`.github/workflows/test.yml`).
 - Image: `ghcr.io/kahalm/log-watcher`.
 

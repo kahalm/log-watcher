@@ -3,7 +3,9 @@ name: Build & Push Docker Image
 on:
   push:
     branches: [main]          # -> :dev (Vorschau)
-    tags: ['v*']              # -> :latest + :x.y.z (Prod, tag-gated)
+    # -> :latest + :x.y.z (Prod, tag-gated). Nur reine Release-Tags vX.Y.Z; ein Sicherungs-Tag
+    # wie "vorher-umbau" oder "v-test" darf keinen Prod-Build auslösen.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 env:
   REGISTRY: ghcr.io
@@ -16,6 +18,28 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # volle Historie: der Release-Guard prüft, ob der markierte Commit auf main liegt
+          fetch-depth: 0
+
+      # Release-Guard: ein Tag geht nur nach Prod (:latest), wenn er die Form vX.Y.Z hat UND der
+      # markierte Commit auf main liegt. Sonst bricht der Job vor dem Push ab (Watchtower würde
+      # :latest sonst um 02:00 mit einem ungemergten Branch-Stand ausrollen).
+      - name: Release-Tag prüfen (vX.Y.Z und auf main)
+        id: release
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' ist kein Release-Tag vX.Y.Z - kein Build."
+            exit 1
+          fi
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::Tag '$GITHUB_REF_NAME' liegt nicht auf main - kein Build."
+            exit 1
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
 
       - name: Build-Zeitstempel setzen
         run: echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
@@ -30,9 +54,12 @@ jobs:
         id: meta
         with:
           images: ${{ env.REGISTRY }}/kahalm/log-watcher
+          # :latest ausschließlich über den Release-Guard, nicht zusätzlich automatisch
+          flavor: |
+            latest=false
           tags: |
             type=raw,value=dev,enable={{is_default_branch}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.release == 'true' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
