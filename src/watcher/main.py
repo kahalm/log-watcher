@@ -44,7 +44,7 @@ def _heartbeat_counts(cfg: Config, es: ESClient, now: datetime) -> dict:
             log.warning("Ungültige HEARTBEAT_CHECKS-Angabe übersprungen: %r", spec)
             continue
         name, index, phrase = parts
-        query = {"bool": {"must": [{"match_phrase": {cfg.sample_field: phrase}}, rng]}}
+        query = {"bool": {"must": [{"match_phrase": {cfg.heartbeat_field: phrase}}, rng]}}
         counts[name] = es.count(index, query)
     return counts
 
@@ -200,7 +200,8 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         # Beispiel-Logzeilen nur holen, wenn der LLM wirklich läuft (Feature 14), dann redigieren (19).
         samples = []
         if use_llm and cfg.include_samples:
-            samples = es.fetch_samples(_iso(now - win), _iso(now), cfg.sample_size, cfg.sample_field)
+            samples = es.fetch_samples(_iso(now - win), _iso(now), cfg.sample_size,
+                                       cfg.sample_field or cfg.message_field)
             if cfg.scrub_pii:
                 samples = [scrub.scrub(s) for s in samples]
         assessment = analyzer.assess(cfg, current, baseline, signals, samples=samples, use_llm=use_llm)

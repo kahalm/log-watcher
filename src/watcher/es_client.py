@@ -96,7 +96,12 @@ class ESClient:
         return {"total": 0, "levels": {}, "error_messages": {}}
 
     def fetch_samples(self, start_iso: str, end_iso: str, size: int, field: str) -> list:
-        """Jüngste Fehler-Logzeilen (nur das angegebene Feld) als LLM-Kontext (Feature 14)."""
+        """Jüngste Fehler-Logzeilen (nur das angegebene Feld) als LLM-Kontext (Feature 14).
+
+        Über die `fields`-Option statt `_source`: so klappen auch verschachtelte ECS-Felder
+        (labels.MessageTemplate) und keyword-Unterfelder (messageTemplate.keyword) — per
+        `_source` kämen die nie an und die Samples blieben still leer.
+        """
         cfg = self.cfg
         body = {
             "size": max(0, size),
@@ -105,7 +110,8 @@ class ESClient:
                 "filter": [{"terms": {cfg.level_field: cfg.error_levels}}],
             }},
             "sort": [{cfg.timestamp_field: {"order": "desc"}}],
-            "_source": [field],
+            "_source": False,
+            "fields": [field],
         }
         try:
             resp = self._search(body)
@@ -113,7 +119,8 @@ class ESClient:
             return []  # Samples sind optional -> nie den Zyklus killen
         out = []
         for h in resp.get("hits", {}).get("hits", []):
-            val = (h.get("_source") or {}).get(field)
+            vals = (h.get("fields") or {}).get(field) or []
+            val = vals[0] if isinstance(vals, list) and vals else None
             if val:
                 out.append(str(val)[:300])
         return out

@@ -71,12 +71,16 @@ class Config:
     # Heartbeat-Überwachung: erwartete Lebenszeichen pro Dienst als "name=index=phrase"-Tripel
     # (komma-separiert). Kam in den letzten HEARTBEAT_MAX_STALENESS_MINUTES kein passender
     # Heartbeat → Signal "heartbeat_missing" (Dienst vermutlich tot). 0 min = aus.
-    # phrase wird per match_phrase gegen das gerenderte Message-Feld (sample_field) geprüft.
+    # phrase wird per match_phrase gegen das gerenderte Message-Feld (heartbeat_field) geprüft.
     heartbeat_checks: list = field(default_factory=lambda: _list(
         "HEARTBEAT_CHECKS",
         "rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,"
         "rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,"
         "schach-bot=rookhub-logs-*=ClientLog heartbeat_bot"))
+    # Feld für den Heartbeat-Abgleich: die GERENDERTE Nachricht (ECS: message). Eigenes Feld,
+    # damit die LLM-Samples (sample_field) aufs Template umziehen können, ohne dass jeder
+    # Dienst plötzlich heartbeat_missing meldet.
+    heartbeat_field: str = field(default_factory=lambda: _str("HEARTBEAT_FIELD", "message"))
     heartbeat_max_staleness_minutes: float = field(default_factory=lambda: _float("HEARTBEAT_MAX_STALENESS_MINUTES", 5.0))
     interval_seconds: int = field(default_factory=lambda: _int("INTERVAL_SECONDS", 6 * 3600))
     run_once: bool = field(default_factory=lambda: _bool("RUN_ONCE", False))
@@ -162,7 +166,10 @@ class Config:
     llm_verdict_ttl_hours: float = field(default_factory=lambda: _float("LLM_VERDICT_TTL_HOURS", 12.0))  # Cache (12)
     include_samples: bool = field(default_factory=lambda: _bool("LLM_INCLUDE_SAMPLES", True))       # (14)
     sample_size: int = field(default_factory=lambda: _int("LLM_SAMPLE_SIZE", 5))
-    sample_field: str = field(default_factory=lambda: _str("LLM_SAMPLE_FIELD", "message"))
+    # Feld der Beispielzeilen, die an Anthropic gehen. Leer = das Template-Feld (message_field):
+    # ohne eingesetzte Werte, also ohne Benutzernamen/IDs. "message" schickt die GERENDERTEN
+    # Zeilen — SCRUB_PII entfernt E-Mails/IPs/Tokens, Namen bleiben stehen.
+    sample_field: str = field(default_factory=lambda: _str("LLM_SAMPLE_FIELD", ""))
     scrub_pii: bool = field(default_factory=lambda: _bool("SCRUB_PII", True))                        # (19)
 
     # --- SMTP ---

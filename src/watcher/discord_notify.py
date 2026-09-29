@@ -51,9 +51,10 @@ def build_alert_payload(subject: str, assessment, signals, current, baseline, cf
         "description": escape_markdown(assessment.get("summary") or "")[:4096],
         "color": _COLOR.get(sev, 0x6C757D),
         "fields": fields[:25],
-        # Target-Name + ES-URL im Footer: macht die Quelle eindeutig, wenn mehrere
-        # ES-Instanzen identische Index-Namen haben (prod vs. dev, beide rookhub-logs-*).
-        "footer": {"text": f"{cfg.name} · {cfg.es_url}"[:2048]},
+        # Target-Name im Footer: macht die Quelle eindeutig, wenn mehrere ES-Instanzen
+        # identische Index-Namen haben (prod vs. dev, beide rookhub-logs-*). Die ES-URL
+        # (interne LAN-Adresse) gehört nicht in einen Drittanbieter-Kanal.
+        "footer": {"text": str(cfg.name)[:2048]},
     }
     payload = {"embeds": [embed]}
     # HIGH pingt den konfigurierten Benutzer — als content (Embeds pingen nie) und mit

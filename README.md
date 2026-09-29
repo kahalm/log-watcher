@@ -34,10 +34,13 @@ False-Positives niedrig.
 
 ## Warum hybrid (und nicht „LLM liest alle Logs")
 - **Kosten/Token:** Es werden nur **Aggregate** (Zähler je Level, Top-Message-Templates, Doc-Volumen)
-  des aktuellen Fensters und des Vorfensters an den LLM gegeben — niemals Rohlogs.
+  des aktuellen Fensters und des Vorfensters an den LLM gegeben, dazu bis zu `LLM_SAMPLE_SIZE`
+  Beispielzeilen aus dem Template-Feld — keine Rohlogs, solange `LLM_SAMPLE_FIELD` leer bleibt.
 - **Wenig False-Positives:** Der LLM läuft nur, wenn das Regel-Gate (Spike/Fatal/neue Signatur/
   Ingestion-Stopp) anschlägt — und urteilt dann konservativ.
-- **Privacy:** Nur Aggregate + Message-Templates verlassen den Host, keine Rohlogs/PII.
+- **Privacy:** Per Default verlassen nur Aggregate + Message-Templates (ohne eingesetzte Werte) den
+  Host, Empfänger ist Anthropic. Wer `LLM_SAMPLE_FIELD=message` setzt, schickt **gerenderte**
+  Fehlerzeilen: `SCRUB_PII` entfernt E-Mails/IPs/Tokens, Benutzernamen und IDs bleiben stehen.
 - **Degradiert sauber:** Ohne `ANTHROPIC_API_KEY` meldet der Watcher rein **regelbasiert**.
 
 ## Signale (Regel-Gate)
@@ -95,7 +98,7 @@ Siehe `.env.example`. Wichtigste Werte:
 | `ES_LEVEL_FIELD` / `ES_MESSAGE_FIELD` | `log.level` / `labels.MessageTemplate` | keyword-Felder für Level und Roh-Template (ECS, `schema/logging-schema.md`); alter Serilog.Sinks.Elasticsearch-Sink: `level.keyword` / `messageTemplate.keyword`. Zählt ein Fenster Fehler/Warnungen, aber keine Templates, warnt der Watcher einmal je Target im Log — dann sind `new_errors` und die Top-Fehler stumm |
 | `WINDOW_HOURS` / `INTERVAL_SECONDS` | `6` / `21600` | Fenstergröße / Prüfintervall |
 | `INDEX_SILENT_WINDOW_HOURS` | `24` | eigenes (größeres) Fenster nur für die Per-Index-Stille-Prüfung; vermeidet Fehlalarme bei bursty Low-Volume-Indizes (z.B. crawler-logs). `0` = aus |
-| `HEARTBEAT_CHECKS` | `rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,schach-bot=rookhub-logs-*=ClientLog heartbeat_bot` | erwartete Lebenszeichen als `name=index=phrase`-Tripel (komma-getrennt); `phrase` wird per `match_phrase` gegen das gerenderte Message-Feld geprüft. **Gilt für JEDES Target**, das in der `config.yaml` keine eigenen `heartbeat_checks` setzt — Targets ohne Heartbeat brauchen `heartbeat_checks: []` |
+| `HEARTBEAT_CHECKS` | `rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api,rookhub-crawler=crawler-logs-*=Heartbeat: rookhub-crawler,schach-bot=rookhub-logs-*=ClientLog heartbeat_bot` | erwartete Lebenszeichen als `name=index=phrase`-Tripel (komma-getrennt); `phrase` wird per `match_phrase` gegen das gerenderte Message-Feld (`HEARTBEAT_FIELD`, Default `message`) geprüft. **Gilt für JEDES Target**, das in der `config.yaml` keine eigenen `heartbeat_checks` setzt — Targets ohne Heartbeat brauchen `heartbeat_checks: []` |
 | `HEARTBEAT_MAX_STALENESS_MINUTES` | `5` | kein passender Heartbeat in diesem Fenster → `heartbeat_missing`. `0` = Heartbeat-Prüfung aus |
 | `MIN_ERRORS` / `ERROR_SPIKE_FACTOR` | `5` / `3.0` | Spike-Schwellen |
 | `SECURITY_CHECK` | `true` | Security-Heuristik (API-Abklopfen erkennen) an/aus |
@@ -114,6 +117,7 @@ Siehe `.env.example`. Wichtigste Werte:
 | `LINUX_HOST_SILENT_CHECK` / `LINUX_HOST_SILENT_MIN_BASELINE` | `true` / `10` | verstummte Hosts melden (Vorfenster ≥ N Docs, aktuell 0) |
 | `LINUX_HOST_FIELD` / `LINUX_MESSAGE_FIELD` | `host.hostname` / `message` | Felder der Filebeat-Docs |
 | `ANTHROPIC_API_KEY` | – | optional; ohne → rein regelbasiert |
+| `LLM_INCLUDE_SAMPLES` / `LLM_SAMPLE_SIZE` / `LLM_SAMPLE_FIELD` | `true` / `5` / leer | Beispielzeilen der jüngsten Fehler für den LLM. Leer = Template-Feld (`ES_MESSAGE_FIELD`, ohne eingesetzte Werte); `message` = gerenderte Zeilen (nach `SCRUB_PII` bleiben Namen/IDs drin und gehen an Anthropic) |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | günstiges Monitoring-Modell |
 | `LLM_OUTAGE_NOTICE_HOURS` | `24` | Abstand der Discord-**Warnung**, solange der LLM-Aufruf scheitert (leeres Guthaben, abgelehnter Schlüssel, Drosselung). Der Zyklus läuft dabei regelbasiert weiter, und die tägliche „alles in Ordnung"-Meldung bleibt aus — sie würde behaupten, es habe jemand nachgesehen. `0` = jeden Zyklus warnen |
 | `ES_OUTAGE_NOTICE_HOURS` | `24` | Abstand der Discord-Warnung „Log-Wächter blind", solange der Zyklus eines Targets scheitert (ES nicht erreichbar, unerwartete Ausnahme). Gewarnt wird ab dem **zweiten** gescheiterten Zyklus in Folge, als **eine** Sammelmeldung mit einer Zeile je Elasticsearch; nach der Erholung kommt eine Entwarnung. Die tägliche „alles in Ordnung"-Meldung bleibt aus, solange ein Target scheitert oder in den letzten 24 h nicht erfolgreich geprüft wurde |
@@ -180,7 +184,8 @@ für lokal die `build:`-Zeile einkommentieren). **Tag-gated wie die übrigen Rep
 - **Persistente First-seen (9):** eine Signatur gilt nur beim allerersten Auftreten als „neu".
 - **Per-Index-Stille (10)** und **saisonale Baseline (7):** `BASELINE_MODE=previous|yesterday|last_week`.
 - **LLM-Budget (11)** `LLM_MAX_CALLS_PER_DAY` + **Verdict-Cache (12)** `LLM_VERDICT_TTL_HOURS` → spart Calls.
-- **Sample-Logs (14):** einige *redigierte* Beispielzeilen gehen an den LLM für die Ursachenanalyse.
+- **Sample-Logs (14):** einige *redigierte* Beispielzeilen gehen an den LLM für die Ursachenanalyse —
+  per Default aus dem Template-Feld, also ohne eingesetzte Werte (`LLM_SAMPLE_FIELD`, s.o.).
 - **PII-Scrubbing (19):** `SCRUB_PII` entfernt E-Mails/IPv4+IPv6/Tokens vor LLM/Mail/ES — auch aus den
   Signal-Details (Security-Alarme zeigen dann `<ip>` statt der Quell-IP; wer die IP im Alarm braucht,
   setzt `SCRUB_PII=false`).
