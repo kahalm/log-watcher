@@ -77,6 +77,11 @@ targets:
     # Kein eigener Heartbeat? Dann AUSDRUECKLICH leer setzen — sonst erbt das Target die
     # ENV-Vorgabe HEARTBEAT_CHECKS (rookhub-api/-crawler/schach-bot) und meldet deren Ausfall
     # unter eigenem Namen (ein Crawler-Ausfall = ein HIGH-Ping je Target).
+    # Sobald piratechess seinen HeartbeatService hat (Template "Heartbeat: {HeartbeatService} …"
+    # wie rookhub/Crawler, HeartbeatService = piratechess-api, 1 Zeile/min), statt der leeren
+    # Liste den Dienst über das strukturierte Feld prüfen — ein hängender piratechess meldet
+    # sich dann als heartbeat_missing, nicht erst beim nächsten Nutzer-Import:
+    # heartbeat_checks: ["piratechess-api=piratechess-logs-*"]
     heartbeat_checks: []
     alert_index_prefix: log-watcher-alerts
     # ECS-Logs legen das Roh-Template unter labels.MessageTemplate ab (= Code-Default; hier

@@ -196,7 +196,8 @@ für lokal die `build:`-Zeile einkommentieren). **Tag-gated wie die übrigen Rep
 - **Multi-Target (17):** `CONFIG_FILE=…yaml` überwacht mehrere Index-Gruppen **und mehrere
   Elasticsearch-Instanzen** aus EINEM Container — jedes Target hat eigenes `es_url` (+ `es_api_key`
   ODER `es_user`/`es_pass`); Reads/Alert-Index/Digest laufen je Target gegen dessen ES. State/
-  Alerts/Cooldown sind pro Target getrennt (siehe `config.example.yaml`).
+  Alerts/Cooldown sind pro Target getrennt (siehe `config.example.yaml`, dort auch ein
+  auskommentierter Dienst-Heartbeat je Target am Beispiel `piratechess-api`).
 - **Replay (18):** `REPLAY_FROM`/`REPLAY_TO` testet die Regeln über einen vergangenen Zeitraum (nur Log-Ausgabe).
 - **Digest (4):** `DIGEST_ENABLED=true` schickt eine periodische Zusammenfassung (`DIGEST_HOUR_UTC`, `DIGEST_PERIOD_DAYS`).
 
