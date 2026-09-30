@@ -18,13 +18,13 @@ echo "   ok"
 # 3) Component-Template in die App-Index-Templates einhaengen (composed_of).
 #    Nur fuer Data-Stream-Templates der Elastic.Serilog.Sinks-/ECS-Apps gedacht.
 #    Argumente: Liste von Index-Template-Namen.
-wire () {
-  for tpl in "$@"; do
-    cur=$(curl -fsS "$ES/_index_template/$tpl" 2>/dev/null) || { echo "   $tpl: nicht vorhanden, skip"; continue; }
-    python3 - "$tpl" <<PY
-import json,sys,subprocess,os
-tpl=sys.argv[1]; es=os.environ["ES"]
-doc=json.loads(r'''$cur''')["index_templates"][0]["index_template"]
+#    Python-Teil als QUOTIERTES Heredoc: die ES-Antwort kommt per stdin, nie als Quelltext (ein
+#    ''' im Template-Inhalt haette sonst beliebigen Code ausgefuehrt). ES geht als Argument mit,
+#    die Shell-Variable ist nicht exportiert.
+WIRE_PY=$(cat <<'PY'
+import json,sys,subprocess
+tpl=sys.argv[1]; es=sys.argv[2]
+doc=json.load(sys.stdin)["index_templates"][0]["index_template"]
 comp=doc.get("composed_of",[]) or []
 if "logs-schema" not in comp:
     comp.append("logs-schema")
@@ -34,6 +34,11 @@ subprocess.run(["curl","-fsS","-X","PUT",f"{es}/_index_template/{tpl}",
     "-H","Content-Type: application/json","--data-binary",body],check=True,stdout=subprocess.DEVNULL)
 print(f"   {tpl}: composed_of={comp}")
 PY
+)
+wire () {
+  for tpl in "$@"; do
+    cur=$(curl -fsS "$ES/_index_template/$tpl" 2>/dev/null) || { echo "   $tpl: nicht vorhanden, skip"; continue; }
+    printf '%s' "$cur" | python3 -c "$WIRE_PY" "$tpl" "$ES"
   done
 }
 
