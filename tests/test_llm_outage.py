@@ -51,7 +51,12 @@ def _fake_anthropic(exc: Exception):
         def __init__(self, **_kw):
             self.messages = _Messages()
 
+    class _Timeout:
+        def __init__(self, timeout, *, connect=None):
+            self.read, self.connect = timeout, connect
+
     mod.Anthropic = _Client
+    mod.Timeout = _Timeout
     return mod
 
 
@@ -127,6 +132,7 @@ def test_llm_client_is_bounded_below_the_healthcheck():
     # Ohne eigenes Limit galten die SDK-Standards (600 s, 2 Wiederholungen): ein haengender
     # Endpunkt hielt die Schleife bis zu ~30 min an, Heartbeat und alle anderen Targets standen.
     anthropic = pytest.importorskip("anthropic")
+    real_client_cls = anthropic.Anthropic
     cfg = Config()
     cfg.anthropic_api_key = "sk-test"
     seen = {}
@@ -134,10 +140,18 @@ def test_llm_client_is_bounded_below_the_healthcheck():
     with patch.object(anthropic, "Anthropic", client):
         analyzer.assess(cfg, {"total": 10}, {"total": 5}, [_S("error_spike", "30 Fehler")], use_llm=True)
 
-    assert seen["timeout"] == analyzer.LLM_TIMEOUT_SECONDS == 60
+    timeout = seen["timeout"]
+    # Grenzen je Phase: nur die Antwort ist auf 60 s begrenzt, der Verbindungsaufbau bleibt bei
+    # 5 s (SDK-Standard). Ein float-Timeout setzte auch connect auf 60 s -> Netzausfall ~121 s.
+    assert timeout.read == analyzer.LLM_TIMEOUT_SECONDS == 60
+    assert timeout.connect == analyzer.LLM_CONNECT_TIMEOUT_SECONDS == 5
     assert seen["max_retries"] == analyzer.LLM_MAX_RETRIES == 1
-    # alle Versuche zusammen bleiben unter HEALTH_MAX_STALENESS_SECONDS (Standard 180 s)
-    assert seen["timeout"] * (seen["max_retries"] + 1) < 180
+    # alle Versuche zusammen bleiben unter HEALTH_MAX_STALENESS_SECONDS (Standard 180 s);
+    # connect und read zaehlen getrennt, ein Versuch kann also beide ausschoepfen
+    assert (timeout.connect + timeout.read) * (seen["max_retries"] + 1) < 180
+    # das echte SDK nimmt das Objekt an (httpx.Timeout wuerde in SDK 1.x mit TypeError abgelehnt)
+    real = real_client_cls(**seen)
+    assert (real.timeout.connect, real.timeout.read) == (5, 60)
 
 
 def test_llm_timeout_is_booked_as_throttling():

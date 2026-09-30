@@ -12,10 +12,14 @@ import logging
 log = logging.getLogger("log-watcher")
 
 # Obergrenze fuer einen LLM-Aufruf. Er laeuft synchron in der einzigen Schleife: mit den
-# SDK-Standards (600 s, 2 Wiederholungen) hielt ein haengender Endpunkt alle uebrigen Targets und
-# den Heartbeat bis zu ~30 min an. 60 s x 2 Versuche bleiben unter der Healthcheck-Schwelle (180 s);
-# was laenger braucht, bricht ab und wird regelbasiert gemeldet.
+# SDK-Standards (read 600 s, 2 Wiederholungen) hielt ein haengender Endpunkt alle uebrigen Targets
+# und den Heartbeat bis zu ~30 min an. Die httpx-Grenzen zaehlen je Phase getrennt: der
+# Verbindungsaufbau (samt TLS) bleibt beim SDK-Standard von 5 s, damit ein Netz, das Pakete
+# verschluckt, weiter schnell scheitert; nur das Warten auf die Antwort ist auf 60 s begrenzt.
+# (5 + 60) s x 2 Versuche bleiben unter der Healthcheck-Schwelle (180 s); was laenger braucht,
+# bricht ab und wird regelbasiert gemeldet. Ein blosser float-Timeout setzte auch connect auf 60 s.
 LLM_TIMEOUT_SECONDS = 60
+LLM_CONNECT_TIMEOUT_SECONDS = 5.0
 LLM_MAX_RETRIES = 1
 
 _TOOL = {
@@ -148,8 +152,10 @@ def assess(cfg, current, baseline, signals, samples=None, use_llm=None) -> dict:
 
     import anthropic  # lazy: nur nötig wenn LLM wirklich verwendet wird
 
+    # anthropic.Timeout, NICHT httpx.Timeout: SDK 1.x lehnt httpx-Objekte mit TypeError ab.
+    timeout = anthropic.Timeout(LLM_TIMEOUT_SECONDS, connect=LLM_CONNECT_TIMEOUT_SECONDS)
     client = anthropic.Anthropic(api_key=cfg.anthropic_api_key,
-                                 timeout=LLM_TIMEOUT_SECONDS, max_retries=LLM_MAX_RETRIES)
+                                 timeout=timeout, max_retries=LLM_MAX_RETRIES)
     try:
         msg = client.messages.create(
             model=cfg.model,
