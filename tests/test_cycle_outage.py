@@ -258,3 +258,20 @@ def test_failure_reason_never_carries_the_exception_text():
     assert _cycle_failure_reason(ESError("ES nicht erreichbar: x")) == "ES nicht erreichbar"
     assert (_cycle_failure_reason(RuntimeError("connect to 10.24.13.6:9200 failed"))
             == "Unerwarteter Fehler: RuntimeError")
+
+
+def test_failed_recovery_post_is_retried_next_cycle(tmp_path):
+    # Wie S5-012 bei der LLM-Entwarnung: cycle_recovered erst nach erfolgreichem Versand austragen.
+    glob = _cfg("rookhub-prod", tmp_path=tmp_path)
+    st = {}
+    with patch("watcher.main.discord_notify.post_text") as post:
+        _cycle([(glob, _DeadES())], st, _now(7, 40), glob)
+        _cycle([(glob, _DeadES())], st, _now(7, 50), glob)     # Warnung
+    assert post.call_count == 1
+    with patch("watcher.main.discord_notify.post_text", side_effect=OSError("HTTP 502")):
+        _cycle([(glob, _QuietES())], st, _now(7, 55), glob)    # Entwarnung scheitert
+    assert st.get("cycle_recovered") == ["rookhub-prod"]
+    with patch("watcher.main.discord_notify.post_text") as post:
+        _cycle([(glob, _QuietES())], st, _now(7, 58), glob)    # vor 08:00: nur die Entwarnung
+    assert _texts(post) == ["✅ **Log-Wächter prüft wieder:** rookhub-prod."]
+    assert "cycle_recovered" not in st

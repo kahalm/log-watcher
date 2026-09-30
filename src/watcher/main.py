@@ -117,6 +117,45 @@ def _baseline_window(cfg: Config, now: datetime, win: timedelta):
     return now - 2 * win, now - win
 
 
+def _notify(glob: Config, label: str, text: str = "", *, payload=None, mail=None,
+            dry_level: int = logging.INFO) -> set:
+    """Eine Meldung an die konfigurierten Kanäle — der einzige Versandweg (Alert, Digest,
+    Warnungen, Entwarnungen, All-is-well, Start-Meldung).
+
+    text:    Discord-Text (post_text), zugleich die DRY_RUN-Vorschau, wenn keine Mail dabei ist.
+    payload: Discord-Payload (post) statt text; ein Callable wird erst hier gebaut, ein Fehler
+             darin zählt als Kanal-Fehler.
+    mail:    (subject, text_body, html_body) -> zusätzlich per E-Mail, sofern SMTP_HOST gesetzt ist.
+
+    Liefert die Kanäle, die zugestellt haben ({"email", "discord"}, im DRY_RUN {"dry_run"}). Leer
+    heißt: niemand wurde benachrichtigt — dann KEINEN Marker/State fortschreiben, der nächste
+    Zyklus versucht es erneut. Wirft nie wegen eines Kanal-Fehlers.
+    """
+    if glob.dry_run:
+        preview = f"\n--- {mail[0]} ---\n{mail[1]}" if mail else text
+        log.log(dry_level, "DRY_RUN: %s: %s", label, preview)
+        return {"dry_run"}
+    sent = set()
+    if mail is not None and glob.smtp_host:
+        try:
+            notifier.send_email(glob, *mail)
+            sent.add("email")
+            log.info("%s: E-Mail gesendet an %s", label, glob.smtp_to)
+        except Exception as e:  # noqa: BLE001 — Kanal-Fehler darf State/andere Kanäle nicht verhindern
+            log.error("%s: E-Mail fehlgeschlagen: %s", label, e)
+    if glob.discord_webhook_url and (payload is not None or text):
+        try:
+            if payload is None:
+                discord_notify.post_text(glob.discord_webhook_url, text)
+            else:
+                discord_notify.post(glob.discord_webhook_url, payload() if callable(payload) else payload)
+            sent.add("discord")
+            log.info("%s an Discord gesendet.", label)
+        except Exception as e:  # noqa: BLE001
+            log.error("%s an Discord fehlgeschlagen: %s", label, e)
+    return sent
+
+
 def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     win = timedelta(hours=cfg.window_hours)
     base_start, base_end = _baseline_window(cfg, now, win)
@@ -271,29 +310,13 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     text_body = notifier.build_email_body(assessment, signals, current, baseline, cfg)
     html_body = notifier.build_email_html(assessment, signals, current, baseline, cfg)
 
-    emailed = False
-    delivered = False
-    if cfg.dry_run:
-        log.warning("DRY_RUN: würde alarmieren:\n--- %s ---\n%s", subject, text_body)
-        delivered = True  # im Trockenlauf soll der Cooldown wie im Echtbetrieb greifen
-    else:
-        if cfg.smtp_host:
-            try:
-                notifier.send_email(cfg, subject, text_body, html_body)
-                emailed = True
-                delivered = True
-                log.info("E-Mail (HTML+Text) gesendet an %s", cfg.smtp_to)
-            except Exception as e:  # noqa: BLE001 — Kanal-Fehler darf Indizierung/State nicht verhindern
-                log.error("E-Mail-Versand fehlgeschlagen: %s", e)
-        if cfg.discord_webhook_url:
-            try:
-                discord_notify.post(cfg.discord_webhook_url,
-                                    discord_notify.build_alert_payload(subject, assessment, signals, current, baseline, cfg))
-                delivered = True
-                log.info("Discord-Alert gesendet.")
-            except Exception as e:  # noqa: BLE001
-                log.error("Discord-Versand fehlgeschlagen: %s", e)
-
+    # Im Trockenlauf gilt der Alert als zugestellt: der Cooldown soll wie im Echtbetrieb greifen.
+    sent = _notify(cfg, "Alert", mail=(subject, text_body, html_body), dry_level=logging.WARNING,
+                   payload=lambda: discord_notify.build_alert_payload(subject, assessment, signals,
+                                                                      current, baseline, cfg))
+    emailed = "email" in sent
+    delivered = bool(sent)
+    if not cfg.dry_run:
         # Alert für die Kibana-Historie zurück nach ES (best-effort, auch wenn ein Kanal scheiterte).
         if cfg.index_alerts:
             try:
@@ -423,29 +446,12 @@ def _maybe_digest(glob: Config, clients, st: dict, now: datetime) -> None:
         log.warning("Digest übersprungen (ES-Fehler): %s", e)
         return
     subject, text_body, html_body = digest.build(summaries, glob.digest_period_days)
-    delivered = False
-    if glob.dry_run:
-        log.warning("DRY_RUN: würde Digest senden:\n--- %s ---\n%s", subject, text_body)
-        delivered = True
-    else:
-        if glob.smtp_host:
-            try:
-                notifier.send_email(glob, subject, text_body, html_body)
-                delivered = True
-                log.info("Digest-Mail gesendet an %s", glob.smtp_to)
-            except Exception as e:  # noqa: BLE001
-                log.error("Digest-Mail fehlgeschlagen: %s", e)
-        if glob.discord_webhook_url:
-            try:
-                # Backticks raus: die Top-Fehlermeldungen kommen roh aus ES — ein ``` darin würde
-                # den Code-Zaun sprengen und den Rest als Markdown rendern. Mentions (@everyone)
-                # entschärft discord_notify.post zentral via allowed_mentions {parse: []}.
-                fenced = text_body[:1800].replace("`", "'")
-                discord_notify.post_text(glob.discord_webhook_url, f"**{subject}**\n```\n{fenced}\n```")
-                delivered = True
-                log.info("Digest an Discord gesendet.")
-            except Exception as e:  # noqa: BLE001
-                log.error("Digest-Discord fehlgeschlagen: %s", e)
+    # Backticks raus: die Top-Fehlermeldungen kommen roh aus ES — ein ``` darin würde
+    # den Code-Zaun sprengen und den Rest als Markdown rendern. Mentions (@everyone)
+    # entschärft discord_notify.post zentral via allowed_mentions {parse: []}.
+    fenced = text_body[:1800].replace("`", "'")
+    delivered = _notify(glob, "Digest", f"**{subject}**\n```\n{fenced}\n```",
+                        mail=(subject, text_body, html_body), dry_level=logging.WARNING)
     # Periodenmarker nur bei erfolgreichem Versand fortschreiben — sonst fällt der Digest
     # wegen eines kurzen Kanal-Ausfalls für die ganze Periode aus.
     if not delivered:
@@ -493,19 +499,15 @@ def _maybe_llm_outage_warning(glob: Config, st: dict, now: datetime) -> None:
     if not glob.discord_webhook_url:
         return
 
-    recovered = st.pop("llm_recovered", None)
+    recovered = st.get("llm_recovered")
     if isinstance(recovered, dict):
         msg = ("✅ **Log-Wächter bewertet wieder vollständig.**\n"
                f"> {recovered.get('reason', 'LLM-Aufruf')} — behoben.")
-        if glob.dry_run:
-            log.info("DRY_RUN: LLM-Entwarnung: %s", msg)
-        else:
-            try:
-                discord_notify.post_text(glob.discord_webhook_url, msg)
-                log.info("LLM-Entwarnung an Discord gesendet.")
-            except Exception as e:  # noqa: BLE001
-                log.error("LLM-Entwarnung an Discord fehlgeschlagen: %s", e)
-        state.save_state(glob.state_file, st)
+        # Erst nach dem Versand austragen: scheitert Discord, bliebe sonst die Ausfall-Warnung
+        # die letzte Meldung im Kanal — der nächste Zyklus versucht die Entwarnung erneut.
+        if _notify(glob, "LLM-Entwarnung", msg):
+            st.pop("llm_recovered", None)
+            state.save_state(glob.state_file, st)
 
     if not state.llm_outage_needs_notice(st, now.timestamp(), glob.llm_outage_notice_hours * 3600):
         return
@@ -525,15 +527,8 @@ def _maybe_llm_outage_warning(glob: Config, st: dict, now: datetime) -> None:
            "bleibt aus, solange das so ist.\n"
            f"→ {todo}")
 
-    if glob.dry_run:
-        log.warning("DRY_RUN: LLM-Ausfall-Warnung: %s", msg)
-    else:
-        try:
-            discord_notify.post_text(glob.discord_webhook_url, msg)
-            log.warning("LLM-Ausfall-Warnung an Discord gesendet (%s).", outage.get("kind"))
-        except Exception as e:  # noqa: BLE001
-            log.error("LLM-Ausfall-Warnung an Discord fehlgeschlagen: %s", e)
-            return   # nicht als gemeldet verbuchen, dann greift der naechste Zyklus
+    if not _notify(glob, f"LLM-Ausfall-Warnung ({outage.get('kind')})", msg, dry_level=logging.WARNING):
+        return   # nicht als gemeldet verbuchen, dann greift der naechste Zyklus
     state.record_llm_outage_notice(st, now.timestamp())
     state.save_state(glob.state_file, st)
 
@@ -626,19 +621,14 @@ def _maybe_cycle_outage_warning(glob: Config, targets, st: dict, now: datetime) 
     if not glob.discord_webhook_url:
         return
 
-    recovered = st.pop("cycle_recovered", None)
+    recovered = st.get("cycle_recovered")
     if isinstance(recovered, list) and recovered:
         msg = ("✅ **Log-Wächter prüft wieder:** "
                + _names_md(sorted(set(str(n) for n in recovered))) + ".")
-        if glob.dry_run:
-            log.info("DRY_RUN: Zyklus-Entwarnung: %s", msg)
-        else:
-            try:
-                discord_notify.post_text(glob.discord_webhook_url, msg)
-                log.info("Zyklus-Entwarnung an Discord gesendet.")
-            except Exception as e:  # noqa: BLE001
-                log.error("Zyklus-Entwarnung an Discord fehlgeschlagen: %s", e)
-        state.save_state(glob.state_file, st)
+        # Wie bei der LLM-Entwarnung: erst nach erfolgreichem Versand austragen.
+        if _notify(glob, "Zyklus-Entwarnung", msg):
+            st.pop("cycle_recovered", None)
+            state.save_state(glob.state_file, st)
 
     now_ts = now.timestamp()
     every = glob.es_outage_notice_hours * 3600
@@ -667,16 +657,9 @@ def _maybe_cycle_outage_warning(glob: Config, targets, st: dict, now: datetime) 
            "und die tägliche Alles-in-Ordnung-Meldung bleibt aus, solange das so ist.\n"
            "→ Elasticsearch prüfen, dann `docker logs log-watcher`.")
 
-    if glob.dry_run:
-        log.warning("DRY_RUN: Zyklus-Ausfall-Warnung: %s", msg)
-    else:
-        try:
-            discord_notify.post_text(glob.discord_webhook_url, msg)
-            log.warning("Zyklus-Ausfall-Warnung an Discord gesendet (%s).",
-                        [n for members in groups.values() for n, _ in members])
-        except Exception as e:  # noqa: BLE001
-            log.error("Zyklus-Ausfall-Warnung an Discord fehlgeschlagen: %s", e)
-            return   # nicht als gemeldet verbuchen, dann greift der naechste Zyklus
+    names = [n for members in groups.values() for n, _ in members]
+    if not _notify(glob, f"Zyklus-Ausfall-Warnung ({names})", msg, dry_level=logging.WARNING):
+        return   # nicht als gemeldet verbuchen, dann greift der naechste Zyklus
     for members in groups.values():
         for _, outage in members:
             outage["notified_at"] = now_ts
@@ -711,14 +694,10 @@ def _maybe_alliswell(glob: Config, targets, st: dict, now: datetime) -> None:
         log.info("All-is-well unterdrueckt: nicht geprueft: %s", blind)
         return
     msg = f"🕗 Zwei Uhr und alles in Ordnung!\n> {_ALLISWELL_QUOTE}\n\n✅ Keine Auffälligkeiten in den letzten 24 h."
-    if glob.dry_run:
-        log.info("DRY_RUN: All-is-well: %s", msg)
-    else:
-        try:
-            discord_notify.post_text(glob.discord_webhook_url, msg)
-            log.info("All-is-well-Meldung an Discord gesendet.")
-        except Exception as e:  # noqa: BLE001
-            log.error("All-is-well-Discord fehlgeschlagen: %s", e)
+    # Tagesmarker nur nach Zustellung: scheitert Discord um 08:00 kurz, versucht es der nächste
+    # Zyklus erneut, statt den Tag stumm abzuhaken (der Wächter wirkte sonst tot).
+    if not _notify(glob, "All-is-well-Meldung", msg):
+        return
     st["last_alliswell"] = now.date().isoformat()
     state.save_state(glob.state_file, st)
 
@@ -796,16 +775,8 @@ def main() -> int:
     if glob.notify_on_start and not glob.dry_run:
         start_msg = _startup_message(targets)
         log.info("Start-Meldung: %s", start_msg)
-        if glob.smtp_host:
-            try:
-                notifier.send_email(glob, "[log-watcher] gestartet", start_msg)
-            except Exception as e:  # noqa: BLE001 — Start-Meldung darf den Start nicht verhindern
-                log.warning("Start-Mail fehlgeschlagen: %s", e)
-        if glob.discord_webhook_url:
-            try:
-                discord_notify.post_text(glob.discord_webhook_url, start_msg)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Start-Discord fehlgeschlagen: %s", e)
+        # zustandslos: ein Fehlschlag wird nur geloggt und verhindert den Start nicht
+        _notify(glob, "Start-Meldung", start_msg, mail=("[log-watcher] gestartet", start_msg, None))
 
     while not _stop.is_set():
         cycle_now = datetime.now(timezone.utc)

@@ -102,3 +102,32 @@ def test_any_recent_alert_false():
     now_ts = _now(8).timestamp()
     st = {"targets": {"t": {"alerts": {"x": now_ts - 90000}}}}
     assert _any_recent_alert(st, [cfg], now_ts - 86400) is False
+
+
+def test_alliswell_marker_only_after_successful_post():
+    # Fund S5-012: Discord antwortet um 08:00 kurz mit 5xx — der Tagesmarker wurde trotzdem
+    # gesetzt, an diesem Tag kam keine Meldung, der Wächter wirkte tot.
+    glob = _cfg()
+    st = {}
+    with patch("watcher.main.discord_notify.post_text", side_effect=OSError("HTTP 502")), \
+         patch("watcher.main.state.save_state") as save:
+        _maybe_alliswell(glob, [], st, _now(8))
+    assert "last_alliswell" not in st          # der Tag bleibt offen
+    save.assert_not_called()
+
+    with patch("watcher.main.discord_notify.post_text") as mock_post, \
+         patch("watcher.main.state.save_state"):
+        _maybe_alliswell(glob, [], st, _now(8).replace(minute=10))   # nächster Zyklus
+    mock_post.assert_called_once()
+    assert st["last_alliswell"] == "2026-06-06"
+
+
+def test_alliswell_dry_run_sets_marker_without_posting():
+    glob = _cfg()
+    glob.dry_run = True
+    st = {}
+    with patch("watcher.main.discord_notify.post_text") as mock_post, \
+         patch("watcher.main.state.save_state"):
+        _maybe_alliswell(glob, [], st, _now(8))
+    mock_post.assert_not_called()
+    assert st["last_alliswell"] == "2026-06-06"

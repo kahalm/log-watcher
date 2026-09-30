@@ -226,3 +226,23 @@ def test_recovery_is_announced_once_when_it_had_been_warned_about():
     post.assert_called_once()
     assert "✅" in post.call_args[0][1]
     assert "llm_recovered" not in st
+
+
+def test_failed_recovery_post_is_retried_next_cycle():
+    # Fund S5-012: llm_recovered wurde VOR dem Versand aus dem State genommen und danach
+    # gespeichert — scheiterte Discord, war die Entwarnung verloren und die Ausfall-Warnung
+    # blieb die letzte Meldung im Kanal.
+    glob = _glob()
+    st = {"llm_recovered": {"kind": "guthaben", "reason": "Anthropic-Guthaben erschöpft",
+                            "since": _now(8).timestamp() - 3600, "at": _now(9).timestamp()}}
+    with patch("watcher.main.discord_notify.post_text", side_effect=OSError("HTTP 429")), \
+         patch("watcher.main.state.save_state"):
+        _maybe_llm_outage_warning(glob, st, _now(9))
+    assert "llm_recovered" in st                # bleibt für den nächsten Zyklus stehen
+
+    with patch("watcher.main.discord_notify.post_text") as post, \
+         patch("watcher.main.state.save_state"):
+        _maybe_llm_outage_warning(glob, st, _now(10))
+    post.assert_called_once()
+    assert "✅" in post.call_args[0][1]
+    assert "llm_recovered" not in st
