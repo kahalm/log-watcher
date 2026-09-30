@@ -18,6 +18,9 @@ class _FakeES:
     def security_window(self, a, b):
         return {"total_requests": 100, "suspicious": {"count": 0, "paths": {}, "ips": {}}, "by_ip": {}}
 
+    def count(self, index, query):
+        return 5    # Heartbeats (seit S5-015 auch im Replay geprüft) — hier alle Dienste lebendig
+
 
 def test_replay_steps_full_windows():
     cfg = Config()  # window_hours=6, baseline previous -> 2 Aggregate je Fenster

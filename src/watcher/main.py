@@ -156,25 +156,29 @@ def _notify(glob: Config, label: str, text: str = "", *, payload=None, mail=None
     return sent
 
 
-def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
+def collect_signals(cfg: Config, es: ESClient, now: datetime, known_fingerprints=None,
+                    log_prefix: str = ""):
+    """Alle Signale für das Fenster bis `now` — gemeinsam für run_cycle und replay.
+
+    Aggregate (+ PII-Scrub der Templates), Regel-Gate, Index-Stille, Heartbeats, Security,
+    Linux. Ein neues Signal gehört hierher, dann prüft es der Regeltest über die Vergangenheit
+    (REPLAY) genauso wie der Echtbetrieb. known_fingerprints=None: zustandslos (Replay).
+    Liefert (current, baseline, signals); die Signal-Details sind noch ROH (die Signatur wird
+    vor dem Redigieren gebildet). Ein ESError der Aggregate fliegt durch, die Zusatzprüfungen
+    werden einzeln mit Warnung übersprungen.
+    """
     win = timedelta(hours=cfg.window_hours)
     base_start, base_end = _baseline_window(cfg, now, win)
     current = es.aggregate_window(_iso(now - win), _iso(now))
     baseline = es.aggregate_window(_iso(base_start), _iso(base_end))
-    rules.warn_if_templates_missing(current, cfg)
+    rules.warn_if_templates_missing(current, cfg, log_prefix)
 
     # PII/Secrets aus den Message-Templates entfernen, bevor sie in LLM/Mail/ES gehen (Feature 19).
     if cfg.scrub_pii:
         current["error_messages"] = scrub.scrub_messages(current.get("error_messages", {}))
         baseline["error_messages"] = scrub.scrub_messages(baseline.get("error_messages", {}))
 
-    log.info("Fenster: total=%s levels=%s | Baseline(%s): total=%s",
-             current["total"], current["levels"], cfg.baseline_mode, baseline["total"])
-
-    st = state.load_state(cfg.state_file)
-    now_ts = now.timestamp()
-    known = state.known_fingerprints(st, cfg.name)
-    signals = rules.evaluate(current, baseline, cfg, known_fingerprints=known)
+    signals = rules.evaluate(current, baseline, cfg, known_fingerprints=known_fingerprints)
 
     # Per-Index-Stille über ein eigenes (größeres) Fenster prüfen — vermeidet Fehlalarme
     # bei bursty, aktivitätsgetriebenen Indizes (z.B. crawler-logs hat normale Leerlaufphasen).
@@ -185,7 +189,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             base_idx = es.per_index_counts(_iso(now - 2 * isw), _iso(now - isw))
             signals += rules.evaluate_index_silence(cur_idx, base_idx, cfg, cfg.index_silent_window_hours)
         except ESError as e:
-            log.warning("Index-Stille-Prüfung übersprungen: %s", e)
+            log.warning("%sIndex-Stille-Prüfung übersprungen: %s", log_prefix, e)
 
     # Heartbeat-Überwachung: fehlt das Lebenszeichen eines Dienstes → vermutlich tot. Greift
     # pro Dienst (genauer als die Index-Stille) und macht „Stille" verlässlich auswertbar,
@@ -194,7 +198,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         try:
             signals += rules.evaluate_heartbeats(_heartbeat_counts(cfg, es, now), cfg)
         except ESError as e:
-            log.warning("Heartbeat-Prüfung übersprungen: %s", e)
+            log.warning("%sHeartbeat-Prüfung übersprungen: %s", log_prefix, e)
 
     # Security-Heuristik: systematisches API-Abklopfen (Scanner-Pfade, Pfad-Enumeration,
     # Auth-Brute-Force) über die HTTP-Zugriffslogs desselben Fensters erkennen.
@@ -203,7 +207,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             sec = es.security_window(_iso(now - win), _iso(now))
             signals += security.evaluate_security(sec, cfg)
         except ESError as e:
-            log.warning("Security-Prüfung übersprungen: %s", e)
+            log.warning("%sSecurity-Prüfung übersprungen: %s", log_prefix, e)
 
     # Linux-System-Heuristik: SSH-Brute-Force, OOM, Disk-Fehler, Unit-Failures und
     # verstummte Hosts über die Filebeat-/journald-Logs (eigene Indizes).
@@ -212,43 +216,28 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
             lin = es.linux_window(_iso(now - win), _iso(now), _iso(now - 2 * win))
             signals += linux.evaluate_linux(lin, cfg)
         except ESError as e:
-            log.warning("Linux-Prüfung übersprungen: %s", e)
+            log.warning("%sLinux-Prüfung übersprungen: %s", log_prefix, e)
 
-    # Signatur aus den ROHEN Details bilden — VOR dem Redigieren. Sonst kollabieren
-    # verschiedene Angreifer-IPs auf dieselbe Signatur (beide werden zu "<ip>") und der
-    # zweite Angreifer läuft still in den 12h-Cooldown des ersten, inklusive dessen
-    # gecachtem LLM-Verdict.
-    raw_signature = state.signature(signals)
+    return current, baseline, signals
 
-    # Signal-Details erst hier redigieren — danach geht nichts mehr an LLM/Mail/Discord/ES
-    # vorbei. Ohne das gingen die Roh-Client-IPs aus security.py trotz SCRUB_PII=true raus.
-    if cfg.scrub_pii:
-        scrub.scrub_signals(signals)
 
-    METRICS.add_signals([s.kind for s in signals])
+def _forced_signals(signals) -> list:
+    """Bestätigte Security-/Linux-Signale: immer eine „große Warnung“."""
+    return [s for s in signals if s.kind in security.SECURITY_KINDS or s.kind in linux.FORCED_KINDS]
 
-    # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9).
-    state.record_fingerprints(st, cfg.name, {fp.fingerprint(m) for m in current.get("error_messages", {})}, now_ts)
 
-    if not signals:
-        state.save_state(cfg.state_file, st)
-        log.info("Keine Auffälligkeit (Regel-Gate leer).")
-        return
-
-    log.info("Regel-Gate ausgelöst: %s", [s.kind for s in signals])
-    sig = raw_signature
-    if state.in_cooldown(st, cfg.name, sig, cfg.cooldown_hours * 3600, now_ts):
-        state.save_state(cfg.state_file, st)
-        METRICS.inc("suppressed_total")
-        log.info("Unterdrückt (Cooldown aktiv für Signatur %s).", sig)
-        return
-
+def assess_cached(cfg: Config, es: ESClient, st: dict, sig: str, now: datetime,
+                  current: dict, baseline: dict, signals) -> dict:
+    """Beurteilung einer Signatur: Verdict-Cache, LLM-Tagesbudget, Samples, LLM-Ausfall-State,
+    Security-Zwang. Schreibt nur in `st` (Speichern macht run_cycle)."""
+    now_ts = now.timestamp()
     # Verdict-Cache (12): identische Signatur innerhalb der TTL nicht erneut (teuer) bewerten.
     ttl = cfg.llm_verdict_ttl_hours * 3600
     assessment = state.get_cached_verdict(st, cfg.name, sig, ttl, now_ts)
     if assessment is not None:
         log.info("Verdict-Cache-Treffer für Signatur %s.", sig)
     else:
+        win = timedelta(hours=cfg.window_hours)
         day = now.strftime("%Y-%m-%d")
         use_llm = bool(cfg.anthropic_api_key) and state.llm_calls_remaining(st, day, cfg.llm_max_calls_per_day) > 0
         if cfg.anthropic_api_key and not use_llm:
@@ -283,27 +272,23 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
 
     # Bestätigte Security-Signale sind immer eine „große Warnung": der LLM darf einen
     # erkannten Scan/Brute-Force nicht zu „nicht auffällig" herabstufen.
-    security_signals = [s for s in signals
-                        if s.kind in security.SECURITY_KINDS or s.kind in linux.FORCED_KINDS]
+    security_signals = _forced_signals(signals)
     if security_signals:
         assessment["anomalous"] = True
         assessment["severity"] = "high"
         if not assessment.get("summary"):
             assessment["summary"] = ("🚨 Sicherheitsrelevante Auffälligkeit: "
                                      + " ".join(s.detail for s in security_signals))
+    return assessment
 
-    log.info("Beurteilung: anomalous=%s severity=%s llm=%s",
-             assessment.get("anomalous"), assessment.get("severity"), assessment.get("llm_used"))
 
-    if not assessment.get("anomalous"):
-        # Auch "nicht auffällig" merken -> kein erneuter LLM-Call für dasselbe Muster im Cooldown.
-        state.save_state(cfg.state_file, state.record_alert(st, cfg.name, sig, now_ts))
-        return
-
+def deliver(cfg: Config, es: ESClient, now: datetime, sig: str, assessment: dict,
+            current: dict, baseline: dict, signals) -> "tuple[bool, bool]":
+    """Alert per Mail/Discord (über _notify) und in den Alert-Index. Liefert (emailed, delivered)."""
     severity = assessment.get("severity", rules.overall_severity(signals))
     # Target-Name in den Betreff/Titel: bei mehreren ES-Instanzen mit identischen Index-Namen
     # (z.B. rookhub-prod vs. rookhub-dev, beide rookhub-logs-*) sonst nicht auseinanderzuhalten.
-    if security_signals:
+    if _forced_signals(signals):
         subject = f"[log-watcher][{cfg.name}][{severity.upper()}] 🚨 Sicherheits-Alarm in {', '.join(cfg.es_indices)}"
     else:
         subject = f"[log-watcher][{cfg.name}][{severity.upper()}] Auffälligkeit in {', '.join(cfg.es_indices)}"
@@ -315,7 +300,6 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
                    payload=lambda: discord_notify.build_alert_payload(subject, assessment, signals,
                                                                       current, baseline, cfg))
     emailed = "email" in sent
-    delivered = bool(sent)
     if not cfg.dry_run:
         # Alert für die Kibana-Historie zurück nach ES (best-effort, auch wenn ein Kanal scheiterte).
         if cfg.index_alerts:
@@ -327,7 +311,54 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
                 log.info("Alert in ES indiziert (%s)", idx)
             except ESError as e:
                 log.warning("Alert-Indizierung fehlgeschlagen: %s", e)
+    return emailed, bool(sent)
 
+
+def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
+    st = state.load_state(cfg.state_file)
+    current, baseline, signals = collect_signals(cfg, es, now, state.known_fingerprints(st, cfg.name))
+    log.info("Fenster: total=%s levels=%s | Baseline(%s): total=%s",
+             current["total"], current["levels"], cfg.baseline_mode, baseline["total"])
+    now_ts = now.timestamp()
+
+    # Signatur aus den ROHEN Details bilden — VOR dem Redigieren. Sonst kollabieren
+    # verschiedene Angreifer-IPs auf dieselbe Signatur (beide werden zu "<ip>") und der
+    # zweite Angreifer läuft still in den 12h-Cooldown des ersten, inklusive dessen
+    # gecachtem LLM-Verdict.
+    sig = state.signature(signals)
+
+    # Signal-Details erst hier redigieren — danach geht nichts mehr an LLM/Mail/Discord/ES
+    # vorbei. Ohne das gingen die Roh-Client-IPs aus security.py trotz SCRUB_PII=true raus.
+    if cfg.scrub_pii:
+        scrub.scrub_signals(signals)
+
+    METRICS.add_signals([s.kind for s in signals])
+
+    # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9) — vor jedem frühen Return.
+    state.record_fingerprints(st, cfg.name, {fp.fingerprint(m) for m in current.get("error_messages", {})}, now_ts)
+
+    if not signals:
+        state.save_state(cfg.state_file, st)
+        log.info("Keine Auffälligkeit (Regel-Gate leer).")
+        return
+
+    log.info("Regel-Gate ausgelöst: %s", [s.kind for s in signals])
+    if state.in_cooldown(st, cfg.name, sig, cfg.cooldown_hours * 3600, now_ts):
+        state.save_state(cfg.state_file, st)
+        METRICS.inc("suppressed_total")
+        log.info("Unterdrückt (Cooldown aktiv für Signatur %s).", sig)
+        return
+
+    assessment = assess_cached(cfg, es, st, sig, now, current, baseline, signals)
+    log.info("Beurteilung: anomalous=%s severity=%s llm=%s",
+             assessment.get("anomalous"), assessment.get("severity"), assessment.get("llm_used"))
+
+    if not assessment.get("anomalous"):
+        # Auch "nicht auffällig" merken -> kein erneuter LLM-Call für dasselbe Muster im Cooldown.
+        state.save_state(cfg.state_file, state.record_alert(st, cfg.name, sig, now_ts))
+        return
+
+    _emailed, delivered = deliver(cfg, es, now, sig, assessment, current, baseline, signals)
     METRICS.inc("alerts_total")
     # Cooldown nur stempeln, wenn wirklich jemand benachrichtigt wurde. Sonst würde ein
     # transienter SMTP-/Webhook-Ausfall den Alarm für COOLDOWN_HOURS still verschlucken —
@@ -385,35 +416,11 @@ def replay(cfg: Config, es: ESClient, start_dt: datetime, end_dt: datetime) -> i
     fired = 0
     while cursor <= end_dt and not _stop.is_set():
         try:
-            current = es.aggregate_window(_iso(cursor - win), _iso(cursor))
-            b_start, b_end = _baseline_window(cfg, cursor, win)
-            baseline = es.aggregate_window(_iso(b_start), _iso(b_end))
+            # dieselbe Signal-Sammlung wie run_cycle, nur zustandslos (keine First-seen-Historie)
+            _current, _baseline, signals = collect_signals(cfg, es, cursor, log_prefix="REPLAY: ")
         except ESError as e:
             log.error("REPLAY: ES-Fehler: %s", e)
             return 1
-        if cfg.scrub_pii:
-            current["error_messages"] = scrub.scrub_messages(current.get("error_messages", {}))
-            baseline["error_messages"] = scrub.scrub_messages(baseline.get("error_messages", {}))
-        signals = rules.evaluate(current, baseline, cfg)
-        if cfg.ingestion_drop_check and cfg.index_silent_window_hours > 0:
-            isw = timedelta(hours=cfg.index_silent_window_hours)
-            try:
-                cur_idx = es.per_index_counts(_iso(cursor - isw), _iso(cursor))
-                base_idx = es.per_index_counts(_iso(cursor - 2 * isw), _iso(cursor - isw))
-                signals += rules.evaluate_index_silence(cur_idx, base_idx, cfg, cfg.index_silent_window_hours)
-            except ESError as e:
-                log.warning("REPLAY: Index-Stille-Prüfung übersprungen: %s", e)
-        if cfg.security_check:
-            try:
-                signals += security.evaluate_security(es.security_window(_iso(cursor - win), _iso(cursor)), cfg)
-            except ESError as e:
-                log.warning("REPLAY: Security-Prüfung übersprungen: %s", e)
-        if cfg.linux_check and cfg.linux_indices:
-            try:
-                signals += linux.evaluate_linux(
-                    es.linux_window(_iso(cursor - win), _iso(cursor), _iso(cursor - 2 * win)), cfg)
-            except ESError as e:
-                log.warning("REPLAY: Linux-Prüfung übersprungen: %s", e)
         if signals:
             fired += 1
             if cfg.scrub_pii:
