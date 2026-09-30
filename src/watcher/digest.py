@@ -21,11 +21,14 @@ def _count_levels(levels: dict, names) -> int:
 def target_summary(cfg, es, period_seconds: float, now, iso) -> dict:
     start = now - timedelta(seconds=period_seconds)
     agg = es.aggregate_window(iso(start), iso(now))
+    # target.keyword: das Alert-Template setzt keine Mappings, "target" ist dynamisch text (+keyword).
+    # Ein term auf das Textfeld traf Namen mit Bindestrich ("rookhub-prod" -> rookhub, prod) nie
+    # und meldete "0 Alert(s) / alles ruhig".
     alerts = es.count(
         f"{cfg.alert_index_prefix}-*",
         {"bool": {"must": [
             {"range": {"@timestamp": {"gte": iso(start), "lt": iso(now)}}},
-            {"term": {"target": cfg.name}},
+            {"term": {"target.keyword": cfg.name}},
         ]}},
     )
     return {

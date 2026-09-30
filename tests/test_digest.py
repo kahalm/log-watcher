@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 
 from watcher.config import Config
@@ -22,6 +23,47 @@ def test_target_summary():
                               datetime(2026, 6, 1, tzinfo=timezone.utc), _iso)
     assert s["total"] == 1000 and s["errors"] == 80 and s["warnings"] == 20 and s["alerts"] == 3
     assert s["top_errors"][0] == ("boom", 50)
+
+
+class _MappedAlertES(_FakeES):
+    """Alert-Index wie ES ihn dynamisch anlegt: target = text (Standard-Analyzer) + target.keyword.
+
+    Wertet den term-Filter der Count-Query aus wie ES: auf dem Textfeld gegen die Tokens, auf
+    .keyword gegen den ganzen Wert.
+    """
+    def __init__(self, targets):
+        self.targets = targets
+        self.queries = []
+
+    def count(self, index, query):
+        self.queries.append((index, query))
+        terms = [c["term"] for c in query["bool"]["must"] if "term" in c]
+        assert len(terms) == 1
+        (field, value), = terms[0].items()
+
+        def hit(target):
+            if field == "target.keyword":
+                return target == value
+            if field == "target":
+                return value in re.findall(r"[a-z0-9]+", target.lower())
+            return False
+
+        return sum(1 for t in self.targets if hit(t))
+
+
+def test_target_summary_counts_alerts_of_hyphenated_target():
+    """Fund S5-007: 7 von 8 Prod-Targets heissen wie rookhub-prod; der term auf dem Textfeld
+    zaehlte dort immer 0 und der Digest meldete "alles ruhig"."""
+    cfg = Config()
+    cfg.name = "rookhub-prod"
+    es = _MappedAlertES(["rookhub-prod", "rookhub-prod", "rookhub-prod", "rookhub-dev", "servers"])
+    s = digest.target_summary(cfg, es, 86400, datetime(2026, 9, 29, tzinfo=timezone.utc), _iso)
+    assert s["alerts"] == 3
+    index, query = es.queries[0]
+    assert index == f"{cfg.alert_index_prefix}-*"
+    assert {"term": {"target.keyword": "rookhub-prod"}} in query["bool"]["must"]
+    assert {"range": {"@timestamp": {"gte": "2026-09-28T00:00:00.000Z",
+                                     "lt": "2026-09-29T00:00:00.000Z"}}} in query["bool"]["must"]
 
 
 def test_build_quiet():
