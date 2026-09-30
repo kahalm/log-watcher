@@ -1,4 +1,5 @@
 import json
+import re
 
 from watcher.config import Config
 from watcher import discord_notify
@@ -97,14 +98,61 @@ def test_alert_payload_escapes_markdown_injection():
     p = discord_notify.build_alert_payload("subj", a, signals,
                                            {"total": 1, "levels": {}}, {"total": 0}, Config())
     e = p["embeds"][0]
+    # Im Code-Zaun ist Markdown wirkungslos: der maskierte Link steht dort nur noch als Text.
     sig_field = next(f for f in e["fields"] if f["name"] == "Signale")
-    assert "[Klick](" not in sig_field["value"]
-    assert "\\[Klick\\]" in sig_field["value"]
-    assert "[Klick mich](" not in e["description"]
+    assert "[Klick](" not in _outside_code(sig_field["value"])
+    assert "/[Klick](https://evil.example)" in sig_field["value"]
+    assert "[Klick mich](" not in _outside_code(e["description"])
     cause = next(f for f in e["fields"] if f["name"] == "Vermutete Ursache")
-    assert "`Backticks`" not in cause["value"] and "*Sternchen*" not in cause["value"]
+    assert "`Backticks`" not in cause["value"]            # Backticks wuerden den Zaun sprengen
+    assert "*Sternchen*" not in _outside_code(cause["value"])
     action = next(f for f in e["fields"] if f["name"] == "Empfohlene Aktion")
-    assert "[hier](" not in action["value"]
+    assert "[hier](" not in _outside_code(action["value"])
+
+
+def _outside_code(md: str) -> str:
+    """Was Discord ausserhalb von Codebloecken/Inline-Code rendert (dort wirken Markdown und Links)."""
+    md = re.sub(r"```.*?```", "", md, flags=re.S)
+    return re.sub(r"`[^`\n]*`", "", md)
+
+
+def _all_rendered_text(p) -> list[str]:
+    e = p["embeds"][0]
+    return [e["description"]] + [f["value"] for f in e["fields"]]
+
+
+def test_alert_payload_bare_urls_are_not_linkable():
+    """Discord verlinkt nackte https://-URLs auch ohne Markdown — ein angefragter Pfad wie
+    /.env/https://phish.example/reset wurde im HIGH-Alarm klickbar (Fund S5-014). Signal-Details,
+    Summary, Ursache und Aktion muessen deshalb im Code-Zaun stehen."""
+    detail = ("3 verdächtige Scan-/Exploit-Aufrufe im 6h-Fenster "
+              "(z.B. /.env/https://rookhub-login.example/reset). Quell-IP(s): 203.0.113.7.")
+    a = {"severity": "high",
+         "summary": "🚨 Sicherheitsrelevante Auffälligkeit: " + detail,
+         "suspected_cause": "Scanner fragt http://evil.example/x ab",
+         "recommended_action": "IP blocken, danach https://rookhub-login.example/reset melden\nzweite Zeile",
+         "llm_used": False}
+    p = discord_notify.build_alert_payload("subj", a, [_S("suspicious_requests", detail, "high")],
+                                           {"total": 1, "levels": {}}, {"total": 0}, Config())
+    for text in _all_rendered_text(p):
+        assert "://" not in _outside_code(text), text
+    sig_field = next(f for f in p["embeds"][0]["fields"] if f["name"] == "Signale")
+    assert "/.env/https://rookhub-login.example/reset" in sig_field["value"]   # Inhalt bleibt lesbar
+
+
+def test_code_fence_survives_backticks_and_field_limit():
+    detail = "```\n[Klick](https://evil.example)\n``` " + "x" * 3000
+    a = {"severity": "medium", "summary": "`" * 5000, "suspected_cause": "a`b", "llm_used": False}
+    p = discord_notify.build_alert_payload("subj", a, [_S("error_spike", detail)],
+                                           {"total": 1, "levels": {}}, {"total": 0}, Config())
+    e = p["embeds"][0]
+    sig = next(f for f in e["fields"] if f["name"] == "Signale")["value"]
+    assert len(sig) <= 1024 and len(e["description"]) <= 4096
+    for text in (sig, e["description"]):
+        assert text.startswith("```\n") and text.endswith("\n```")   # Zaun nie abgeschnitten
+        assert text.count("```") == 2                                  # und nicht gesprengt
+    cause = next(f for f in e["fields"] if f["name"] == "Vermutete Ursache")["value"]
+    assert cause == "`a'b`"
 
 
 def test_post_neutralizes_mentions(monkeypatch):

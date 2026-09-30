@@ -22,9 +22,9 @@ _MD_META = "\\`*_[]"
 def escape_markdown(text: str) -> str:
     """Escapt Discord-Markdown-Metazeichen in nicht vertrauenswürdigem Text.
 
-    Signal-Details entstehen aus Angreifer-kontrollierten URL-Pfaden/Hostnamen — ein
-    angefragter Pfad wie /[Klick hier](https://evil) würde im Embed sonst zum klickbaren
-    Link und machte den Alert-Kanal selbst zur Phishing-Fläche.
+    Entschärft maskierte Links wie /[Klick hier](https://evil), aber KEINE nackten URLs:
+    https://… verlinkt Discord trotzdem. Text, der aus Angreifer-kontrollierten URL-Pfaden
+    stammen kann, gehört deshalb in einen Code-Zaun (code_block/code_span).
     """
     if not text:
         return text
@@ -33,22 +33,46 @@ def escape_markdown(text: str) -> str:
     return text
 
 
+_FENCE_OVERHEAD = len("```\n\n```")
+
+
+def code_block(text: str, limit: int) -> str:
+    """Nicht vertrauenswürdigen Text als Discord-Codeblock (wie der Digest).
+
+    Im Code-Zaun rendert Discord weder Markdown noch Links — auch ein nacktes https://… aus
+    einem angefragten Pfad (/.env/https://phish.example) bleibt unklickbar. Backticks werden
+    vorher zu ' (ein ``` im Text würde den Zaun sprengen), gekürzt wird VOR dem Umzäunen, damit
+    das Feldlimit nie den schließenden Zaun abschneidet.
+    """
+    body = str(text or "").replace("`", "'")[:max(0, limit - _FENCE_OVERHEAD)]
+    return f"```\n{body}\n```"
+
+
+def code_span(text: str, limit: int) -> str:
+    """Wie code_block, einzeilig als Inline-Code; mehrzeiliger Text fällt auf den Codeblock zurück."""
+    body = str(text or "").replace("`", "'")
+    if "\n" in body or not body.strip():
+        return code_block(body, limit)
+    return f"`{body[:max(0, limit - 2)]}`"
+
+
 def build_alert_payload(subject: str, assessment, signals, current, baseline, cfg) -> dict:
     sev = str(assessment.get("severity", "low"))
-    # detail escapen: kommt aus Logs/URL-Pfaden (untrusted); kind/severity_hint sind interne Konstanten.
-    sig_text = "\n".join(f"[{s.severity_hint}] {s.kind}: {escape_markdown(s.detail)}" for s in signals) or "—"
-    fields = [{"name": "Signale", "value": sig_text[:1024]}]
+    # detail kommt aus Logs/URL-Pfaden (untrusted) -> Codeblock: kein Markdown, keine Links, auch
+    # keine nackten https://-URLs. kind/severity_hint sind interne Konstanten.
+    sig_lines = "\n".join(f"[{s.severity_hint}] {s.kind}: {s.detail}" for s in signals)
+    fields = [{"name": "Signale", "value": code_block(sig_lines, 1024) if signals else "—"}]
     if assessment.get("suspected_cause"):
-        fields.append({"name": "Vermutete Ursache", "value": escape_markdown(str(assessment["suspected_cause"]))[:1024]})
+        fields.append({"name": "Vermutete Ursache", "value": code_span(assessment["suspected_cause"], 1024)})
     if assessment.get("recommended_action"):
-        fields.append({"name": "Empfohlene Aktion", "value": escape_markdown(str(assessment["recommended_action"]))[:1024]})
+        fields.append({"name": "Empfohlene Aktion", "value": code_span(assessment["recommended_action"], 1024)})
     fields.append({"name": "Fenster", "value":
                    f"total {current['total']} · Baseline {baseline['total']} · "
                    f"LLM {'ja' if assessment.get('llm_used') else 'nein'}"[:1024]})
     embed = {
         "title": subject[:256],
-        # summary rendert Markdown und enthält bei Security-Signalen die Details wörtlich -> escapen.
-        "description": escape_markdown(assessment.get("summary") or "")[:4096],
+        # summary rendert Markdown und enthält bei Security-Signalen die Details wörtlich -> umzäunen.
+        "description": code_block(assessment.get("summary"), 4096) if assessment.get("summary") else "",
         "color": _COLOR.get(sev, 0x6C757D),
         "fields": fields[:25],
         # Target-Name im Footer: macht die Quelle eindeutig, wenn mehrere ES-Instanzen
