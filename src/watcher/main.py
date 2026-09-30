@@ -32,9 +32,15 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+_legacy_heartbeat_warned: set = set()
+
+
 def _heartbeat_counts(cfg: Config, es: ESClient, now: datetime) -> dict:
-    """Pro erwartetem Dienst (cfg.heartbeat_checks: "name=index=phrase") zählen, wie viele
-    passende Heartbeats in den letzten heartbeat_max_staleness_minutes ankamen. {name: count}."""
+    """Pro erwartetem Dienst (cfg.heartbeat_checks) zählen, wie viele passende Heartbeats in den
+    letzten heartbeat_max_staleness_minutes ankamen. {name: count}.
+
+    "name=index": Zeilen mit heartbeat_service_field == name (strukturiert, nicht fälschbar über
+    Freitext). "name=index=phrase": Altform, match_phrase gegen das gerenderte heartbeat_field."""
     counts: dict = {}
     window_min = cfg.heartbeat_max_staleness_minutes
     if window_min <= 0 or not cfg.heartbeat_checks:
@@ -42,11 +48,20 @@ def _heartbeat_counts(cfg: Config, es: ESClient, now: datetime) -> dict:
     rng = {"range": {cfg.timestamp_field: {"gte": _iso(now - timedelta(minutes=window_min)), "lt": _iso(now)}}}
     for spec in cfg.heartbeat_checks:
         parts = [p.strip() for p in spec.split("=", 2)]
-        if len(parts) != 3 or not all(parts):
+        if len(parts) not in (2, 3) or not all(parts):
             log.warning("Ungültige HEARTBEAT_CHECKS-Angabe übersprungen: %r", spec)
             continue
-        name, index, phrase = parts
-        query = {"bool": {"must": [{"match_phrase": {cfg.heartbeat_field: phrase}}, rng]}}
+        name, index = parts[0], parts[1]
+        if len(parts) == 2:
+            match = {"term": {cfg.heartbeat_service_field: name}}
+        else:
+            if spec not in _legacy_heartbeat_warned:
+                _legacy_heartbeat_warned.add(spec)
+                log.warning("HEARTBEAT_CHECKS %r prüft Freitext (fälschbar über jede Logzeile mit "
+                            "diesem Text) — auf %r umstellen (Feld %s).",
+                            spec, f"{name}={index}", cfg.heartbeat_service_field)
+            match = {"match_phrase": {cfg.heartbeat_field: parts[2]}}
+        query = {"bool": {"must": [match, rng]}}
         counts[name] = es.count(index, query)
     return counts
 

@@ -32,7 +32,7 @@ Dienste müssen nichts tun, auch künftige sind abgedeckt. Ein Log kann mehrere 
 
 | Tag | gesetzt wenn | Zweck |
 |-----|--------------|-------|
-| `heartbeat` | Message enthält `Heartbeat:` oder `heartbeat_bot` | Keepalive-Rauschen ausblenden |
+| `heartbeat` | `labels.HeartbeatService` vorhanden, `log.logger` endet auf `.HeartbeatService` oder `labels.ClientLogKind` = `heartbeat_bot` (Alt-Bot-Heartbeat) — **kein** Freitext-Abgleich auf `message`, sonst fiele jede Zeile mit „Heartbeat:“ im Text (z. B. ein Scanner-Pfad im Request-Log) aus der Standardsicht | Keepalive-Rauschen ausblenden |
 | `healthcheck` | `url.path` endet auf `/health` `/healthz` `/livez` `/readyz` | Health-Probe-Rauschen ausblenden |
 | `request` | `http.response.status_code` vorhanden | HTTP-Zugriffslogs von App-Logs trennen |
 | `auth` | Status 401/403 **oder** Message enthält `Anmeldung`/`Unautorisiert`/`Unauthorized` | Anmelde-/Auth-Events (Security) |

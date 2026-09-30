@@ -35,7 +35,8 @@
     } },
 
     { "append": { "field": "tags", "value": ["heartbeat"], "allow_duplicates": false,
-                  "if": "ctx.message != null && (ctx.message.contains('Heartbeat:') || ctx.message.contains('heartbeat_bot'))" } },
+                  "description": "Nur strukturierte Heartbeat-Signale (Property HeartbeatService, Logger *.HeartbeatService, Alt-Bot-Heartbeat ClientLogKind=heartbeat_bot) - kein Freitext, sonst verschwindet jede Zeile mit 'Heartbeat:' im Text (z.B. ein Scanner-Pfad im Request-Log) aus der Standardsicht.",
+                  "if": "ctx.labels?.HeartbeatService != null || (ctx.log?.logger != null && ctx.log.logger.endsWith('.HeartbeatService')) || ctx.labels?.ClientLogKind == 'heartbeat_bot'" } },
     { "append": { "field": "tags", "value": ["healthcheck"], "allow_duplicates": false,
                   "if": "ctx.url?.path != null && (ctx.url.path.endsWith('/health') || ctx.url.path.endsWith('/healthz') || ctx.url.path.endsWith('/livez') || ctx.url.path.endsWith('/readyz'))" } },
     { "append": { "field": "tags", "value": ["request"], "allow_duplicates": false,
