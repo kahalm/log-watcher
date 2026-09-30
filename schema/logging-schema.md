@@ -100,6 +100,7 @@ auf die kanonischen Felder um (idempotent, `ignore_missing`):
 | Quelle (Alt/Synonym) | → Kanonisch |
 |----------------------|-------------|
 | `level` | `log.level` |
+| `"log.level"` (gepunkteter Schlüssel des ECS-Sinks `Elastic.Serilog.Sinks`) | `log.level` (verschachtelt; Schlüssel danach entfernt, gewinnt gegen einen früher gesetzten Default) |
 | `labels.Username`, `fields.UserName` | `user.name` |
 | `fields.UserId` | `user.id` |
 | `fields.SourceContext` | `log.logger` |

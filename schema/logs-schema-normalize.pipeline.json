@@ -25,6 +25,11 @@
     { "set": { "field": "service.name",        "copy_from": "fields.Application", "if": "ctx.service?.name == null && ctx.fields?.Application != null" } },
     { "set": { "field": "service.environment", "copy_from": "labels.Environment", "if": "ctx.service?.environment == null && ctx.labels?.Environment != null" } },
 
+    { "script": {
+        "description": "ECS-Sink (Elastic.Serilog.Sinks) schreibt den Level als GEPUNKTETEN Schluessel 'log.level', den Ingest-Prozessoren nicht als ctx.log.level sehen - ohne diesen Schritt setzt der folgende Default verschachtelt 'Information' und jedes Dokument traegt zwei Level. Gepunkteten Wert nach log.level (verschachtelt) verschieben; er gewinnt auch gegen einen frueher gesetzten Default (Reindex). Wirft nie.",
+        "lang": "painless",
+        "source": "if (ctx.containsKey('log.level') && ctx['log.level'] != null && (ctx.log == null || ctx.log instanceof Map)) { if (ctx.log == null) { ctx.log = new HashMap(); } ctx.log.level = ctx.remove('log.level'); }"
+    } },
     { "set": { "field": "log.level",    "value": "Information", "override": false } },
     { "set": { "field": "service.name", "value": "unknown",     "override": false } },
 
