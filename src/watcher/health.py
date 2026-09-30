@@ -1,22 +1,14 @@
-"""Heartbeat für den Docker-Healthcheck (best-effort, atomar)."""
+"""Heartbeat für den Docker-Healthcheck (atomar; Schreibfehler: einmal ERROR + Zähler)."""
 from __future__ import annotations
 
-import os
-import tempfile
 import time
 
+from .state import atomic_write
 
-def write_heartbeat(path: str, now: "float | None" = None) -> None:
+
+def write_heartbeat(path: str, now: "float | None" = None) -> bool:
     now = time.time() if now is None else now
-    d = os.path.dirname(path) or "."
-    try:
-        os.makedirs(d, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
-        with os.fdopen(fd, "w") as f:
-            f.write(str(now))
-        os.replace(tmp, path)
-    except OSError:
-        pass
+    return atomic_write(path, str(now), "HEARTBEAT_FILE")
 
 
 def read_heartbeat(path: str) -> "float | None":

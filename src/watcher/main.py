@@ -767,6 +767,17 @@ def main() -> int:
             rc |= selftest(cfg, es, now)
         return rc
 
+    # Schreibprobe vor dem Loop: ist /data nicht beschreibbar (Rechte nach USER-Umstellung, Platte
+    # voll, nur lesbar eingehängt), liefen Cooldown, Verdict-Cache, LLM-Tagesbudget und Tagesmarker
+    # still ins Leere — derselbe Alarm alle INTERVAL_SECONDS. Dann lieber gar nicht starten.
+    paths = {("STATE_FILE", c.state_file) for c in targets} | {("HEARTBEAT_FILE", glob.heartbeat_file)}
+    for what, path in sorted(paths):
+        err = state.check_writable(path)
+        if err:
+            log.error("%s %s nicht schreibbar (%s) — Start abgebrochen. Rechte/Eigentümer des "
+                      "Verzeichnisses (Volume /data) und freien Platz prüfen.", what, path, err)
+            return 1
+
     log.info("log-watcher gestartet (targets=%s, intervall=%ss, fenster=%sh, dry_run=%s)",
              [c.name for c in targets], glob.interval_seconds, glob.window_hours, glob.dry_run)
     METRICS.start(now.timestamp())

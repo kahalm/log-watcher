@@ -15,6 +15,7 @@ class Metrics:
         self.llm_tokens_total = 0
         self.es_errors_total = 0
         self.llm_errors_total = 0
+        self.state_write_errors_total = 0
         self.signals_total: dict = {}
         self.last_cycle_ts = 0.0
         self.last_cycle_signals: list = []
@@ -49,6 +50,7 @@ class Metrics:
                 "llm_tokens_total": self.llm_tokens_total,
                 "es_errors_total": self.es_errors_total,
                 "llm_errors_total": self.llm_errors_total,
+                "state_write_errors_total": self.state_write_errors_total,
                 "signals_total": dict(self.signals_total),
                 "last_cycle_ts": self.last_cycle_ts,
                 "last_cycle_signals": list(self.last_cycle_signals),
@@ -70,6 +72,8 @@ class Metrics:
         counter("log_watcher_llm_tokens_total", s["llm_tokens_total"], "LLM-Tokens (in+out)")
         counter("log_watcher_es_errors_total", s["es_errors_total"], "ES-Fehler")
         counter("log_watcher_llm_errors_total", s["llm_errors_total"], "Gescheiterte LLM-Aufrufe")
+        counter("log_watcher_state_write_errors_total", s["state_write_errors_total"],
+                "Gescheiterte Schreibzugriffe auf STATE_FILE/HEARTBEAT_FILE")
         out.append("# HELP log_watcher_signals_total Ausgeloeste Signale nach Art")
         out.append("# TYPE log_watcher_signals_total counter")
         for k, v in s["signals_total"].items():

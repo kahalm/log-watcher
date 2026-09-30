@@ -1,4 +1,4 @@
-"""Persistenter State (atomar, best-effort):
+"""Persistenter State (atomar; Schreibfehler werden geloggt und gezählt, halten aber nicht an):
 
 - pro Target: Cooldown-Alerts, First-seen-Fingerprints, Verdict-Cache
 - global: LLM-Tagesbudget, Digest-Marker
@@ -7,9 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
+
+from .metrics import METRICS
+
+log = logging.getLogger("log-watcher")
 
 # Freistehende Zahlen (Zähler, Schwellen, Minuten) in den Signal-Details. Die Lookarounds
 # schützen Zahlen, die Teil eines Namens sind: Host "vm2"/"vm-01", Index "logs-2", IP
@@ -48,16 +53,67 @@ def load_state(path: str) -> dict:
         return {}
 
 
-def save_state(path: str, state: dict) -> None:
+# Pfade, deren letzter Schreibversuch scheiterte. Die ERROR-Zeile kommt einmal je Ausfall (der
+# Heartbeat schreibt alle 60 s), die Metrik state_write_errors_total zählt jeden Fehlschlag.
+_write_failing: set = set()
+
+_WRITE_CONSEQUENCE = {
+    "STATE_FILE": "Cooldown, Verdict-Cache, LLM-Tagesbudget und Tagesmarker gehen verloren",
+    "HEARTBEAT_FILE": "der Docker-Healthcheck meldet unhealthy",
+}
+
+
+def atomic_write(path: str, text: str, what: str) -> bool:
+    """Schreibt `text` atomar (tmp + replace). True = geschrieben.
+
+    Ein OSError (Rechte, volle Platte, nur lesbar eingehängt) hält den Wächter nicht an, bleibt
+    aber nicht mehr stumm: einmal ERROR je Ausfall, Zähler state_write_errors_total, und die
+    angefangene .tmp-Datei wird weggeräumt (sonst eine weitere je Heartbeat).
+    """
     d = os.path.dirname(path) or "."
+    tmp = None
     try:
         os.makedirs(d, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(state, f)
+            f.write(text)
         os.replace(tmp, path)
-    except OSError:
-        pass  # best-effort
+    except OSError as e:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        METRICS.inc("state_write_errors_total")
+        if path not in _write_failing:
+            _write_failing.add(path)
+            log.error("%s %s nicht schreibbar (%s: %s) — %s. Rechte und freien Platz prüfen.",
+                      what, path, type(e).__name__, e, _WRITE_CONSEQUENCE.get(what, "Zustand geht verloren"))
+        return False
+    if path in _write_failing:
+        _write_failing.discard(path)
+        log.info("%s %s wieder schreibbar.", what, path)
+    return True
+
+
+def check_writable(path: str) -> "str | None":
+    """Schreibprobe im Verzeichnis von `path` (für den Start). None = ok, sonst der Grund."""
+    d = os.path.dirname(path) or "."
+    try:
+        os.makedirs(d, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=d, suffix=".probe")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("probe")
+        finally:
+            os.unlink(tmp)
+    except OSError as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def save_state(path: str, state: dict) -> bool:
+    return atomic_write(path, json.dumps(state), "STATE_FILE")
 
 
 def _target(state: dict, name: str) -> dict:

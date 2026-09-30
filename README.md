@@ -194,6 +194,10 @@ für lokal die `build:`-Zeile einkommentieren). **Tag-gated wie die übrigen Rep
   Signal-Details (Security-Alarme zeigen dann `<ip>` statt der Quell-IP; wer die IP im Alarm braucht,
   setzt `SCRUB_PII=false`).
 - **HTTP (15/16):** `HTTP_PORT>0` → `/healthz`, `/status` (JSON), `/metrics` (Prometheus).
+- **State-Schreibprobe:** vor dem Loop muss das Verzeichnis von `STATE_FILE`/`HEARTBEAT_FILE` beschreibbar
+  sein, sonst Exit 1 mit Grund im Log. Scheitert ein Schreibzugriff im Betrieb (Platte voll), kommt je
+  Ausfall eine ERROR-Zeile, `log_watcher_state_write_errors_total` zählt mit. Läuft der Container einmal
+  nicht als root, gehört `./data` per `chown` dem Container-User.
 - **Multi-Target (17):** `CONFIG_FILE=…yaml` überwacht mehrere Index-Gruppen **und mehrere
   Elasticsearch-Instanzen** aus EINEM Container — jedes Target hat eigenes `es_url` (+ `es_api_key`
   ODER `es_user`/`es_pass`); Reads/Alert-Index/Digest laufen je Target gegen dessen ES. State/
