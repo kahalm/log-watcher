@@ -11,7 +11,23 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # Test-Gate: ohne grüne Tests kein Image — auch nicht beim Release-Tag, dessen :latest
+  # Watchtower nachts auf Prod ausrollt (test.yml läuft bei Tags nicht). Gleiche
+  # Python-Version wie das Image (Dockerfile: python:3.13-slim).
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r requirements-dev.txt
+      - run: PYTHONPATH=src pytest -q
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

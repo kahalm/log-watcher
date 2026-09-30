@@ -158,7 +158,8 @@ ES_URL=http://localhost:9200 SELFTEST=true PYTHONPATH=src python -m watcher.main
 - Push auf `main` → Build `:dev`. Git-Tag `vX.Y.Z` → Build `:latest` + `:X.Y.Z` (Watchtower zieht `:latest`).
   Andere Tags (z. B. `vorher-umbau`, `v1.2.3-rc1`) lösen keinen Build aus; ein `vX.Y.Z`-Tag, dessen Commit nicht
   auf `main` liegt, bricht vor dem Push ab (kein Branch-Stand als `:latest`).
-- Tests laufen via GitHub Actions (`.github/workflows/test.yml`).
+- Tests laufen via GitHub Actions (`.github/workflows/test.yml`); `docker.yml` baut und pusht erst nach grünen
+  Tests (eigener `test`-Job, Python 3.13 wie das Image) — auch beim Release-Tag.
 - Image: `ghcr.io/kahalm/log-watcher`.
 
 ## Deploy (Docker, Homelab — turnkey)

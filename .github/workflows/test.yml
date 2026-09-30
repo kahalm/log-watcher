@@ -13,6 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          # wie das Image (Dockerfile: python:3.13-slim)
+          python-version: '3.13'
       - run: pip install -r requirements-dev.txt
       - run: PYTHONPATH=src pytest -q

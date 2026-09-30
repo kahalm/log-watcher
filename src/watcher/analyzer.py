@@ -81,26 +81,45 @@ def _is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, TimeoutError) or (timeout_cls is not None and isinstance(exc, timeout_cls))
 
 
+_GUTHABEN = ("guthaben", "Anthropic-Guthaben erschöpft")
+_SCHLUESSEL = ("schluessel", "API-Schlüssel abgelehnt")
+_DROSSELUNG = ("drosselung", "API drosselt oder ist überlastet")
+
+
 def classify_llm_error(exc: BaseException) -> tuple[str, str]:
     """(Art, Klartext) eines gescheiterten LLM-Aufrufs.
 
     Die Art entscheidet, was zu TUN ist, und genau das soll in der Warnung stehen: leeres
     Guthaben will aufgeladen werden, ein abgelehnter Schlüssel ersetzt, eine Drosselung
-    ausgesessen. Erkannt wird am Text der API-Antwort, weil die Fehlerklassen des SDK
-    (BadRequestError) beides abdecken — Guthaben UND echte Anfragefehler. Eine
-    Zeitueberschreitung (LLM_TIMEOUT_SECONDS) zaehlt als Drosselung: der Endpunkt ist erreichbar,
-    antwortet aber nicht rechtzeitig.
+    ausgesessen. Zuerst entscheiden SDK-Typ und HTTP-Status (anthropic.APIStatusError):
+    401 = Schlüssel, 429/529 = Drosselung — ein neuer SDK-Major mit anderem Ausnahmetext ändert
+    daran nichts. Der Text ist nur Zusatz: bei einem Status-Fehler für das Guthaben (die
+    Fehlerklasse BadRequestError deckt beides ab — Guthaben UND echte Anfragefehler, den
+    Hinweis trägt der Antwort-Body), bei Fehlern ohne Status für alles. Eine Zeitueberschreitung
+    (LLM_TIMEOUT_SECONDS) zaehlt als Drosselung: der Endpunkt ist erreichbar, antwortet aber
+    nicht rechtzeitig.
     """
     if _is_timeout(exc):
         return "drosselung", "API antwortet nicht rechtzeitig (Zeitüberschreitung)"
     text = str(exc)
     low = text.lower()
-    if "credit balance" in low or "plans & billing" in low or "billing" in low:
-        return "guthaben", "Anthropic-Guthaben erschöpft"
-    if "authentication" in low or "invalid x-api-key" in low or "401" in low:
-        return "schluessel", "API-Schlüssel abgelehnt"
-    if "rate limit" in low or "429" in low or "overloaded" in low:
-        return "drosselung", "API drosselt oder ist überlastet"
+    billing = ("credit balance" in low or "plans & billing" in low or "billing" in low
+               or getattr(exc, "type", None) == "billing_error")
+    status_cls = _sdk_error_class("APIStatusError")
+    status = getattr(exc, "status_code", None) if status_cls and isinstance(exc, status_cls) else None
+    if status == 401:
+        return _SCHLUESSEL
+    if status in (429, 529):
+        return _DROSSELUNG
+    if billing:
+        return _GUTHABEN
+    if status is None:
+        # Ohne HTTP-Status bleibt nur der Text. Mit Status zaehlen Zahlen im Text nicht:
+        # "prompt is too long: 240100 tokens" (400) ist kein abgelehnter Schluessel.
+        if "authentication" in low or "invalid x-api-key" in low or "401" in low:
+            return _SCHLUESSEL
+        if "rate limit" in low or "429" in low or "overloaded" in low:
+            return _DROSSELUNG
     return "sonstiges", text.strip().splitlines()[0][:200] if text.strip() else exc.__class__.__name__
 
 

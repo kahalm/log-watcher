@@ -98,6 +98,55 @@ def test_guard_runs_before_build_with_full_history():
     assert steps[guard].get("if") == "github.ref_type == 'tag'"
 
 
+# --- Test-Gate vor dem Build, gleiche Python-Version wie das Image ----------------------------
+
+ROOT = WORKFLOW.parent.parent.parent
+
+
+def _image_python():
+    first = (ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()[0]
+    m = re.fullmatch(r"FROM python:(\d+\.\d+)(?:[.-].*)?", first.strip())
+    assert m, first
+    return m.group(1)
+
+
+def _python_version(job):
+    for st in job["steps"]:
+        if str(st.get("uses", "")).startswith("actions/setup-python"):
+            return str(st["with"]["python-version"])
+    raise AssertionError("kein setup-python")
+
+
+def _runs(job):
+    return " ".join(str(st.get("run", "")) for st in job["steps"])
+
+
+def test_build_waits_for_green_tests():
+    # Ohne needs baute und pushte ein Tag :latest auch auf rotem Stand; Watchtower rollt es nachts aus.
+    jobs = _workflow()["jobs"]
+    needs = jobs["build"].get("needs")
+    assert needs == "test" or (isinstance(needs, list) and "test" in needs)
+    assert "pytest" in _runs(jobs["test"])
+    assert "requirements-dev.txt" in _runs(jobs["test"])
+
+
+def test_ci_python_matches_image():
+    image = _image_python()
+    assert _python_version(_workflow()["jobs"]["test"]) == image
+    with open(WORKFLOW.parent / "test.yml", encoding="utf-8") as f:
+        test_wf = yaml.safe_load(f)
+    assert _python_version(test_wf["jobs"]["test"]) == image
+
+
+def test_runtime_requirements_have_major_upper_bound():
+    # Ein neuer Major (z. B. anthropic) kommt nicht still mit dem naechsten Image-Build.
+    for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        assert re.search(r"<\s*\d", line), f"keine Obergrenze: {line}"
+
+
 # --- Verhalten des Guard-Skripts in einem echten Wegwerf-Repo -------------------------------
 
 def _git(cwd, *args, env):

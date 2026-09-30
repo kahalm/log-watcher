@@ -80,6 +80,35 @@ def test_classify_llm_error_names_the_thing_to_do():
     assert kind == "sonstiges" and reason == "Verbindung weg"
 
 
+def _sdk_status_error(cls_name: str, status: int, message: str, body=None):
+    """Echter Status-Fehler des installierten anthropic-SDK (Antwort nur als Attrappe)."""
+    anthropic = pytest.importorskip("anthropic")
+    response = types.SimpleNamespace(request=None, status_code=status, headers={})
+    return getattr(anthropic, cls_name)(message, response=response, body=body)
+
+
+@pytest.mark.parametrize("cls_name,status,message,body,expected", [
+    # Neuer SDK-Major, anderer Ausnahmetext: der Status entscheidet trotzdem.
+    ("AuthenticationError", 401, "Unauthorized", None, "schluessel"),
+    ("RateLimitError", 429, "Too Many Requests", None, "drosselung"),
+    ("OverloadedError", 529, "Service busy", None, "drosselung"),
+    # Zahlen im Text zaehlen nicht, wenn der Status bekannt ist (vorher: "401" -> Schluessel).
+    ("BadRequestError", 400, "Error code: 400 - prompt is too long: 240100 tokens > 200000 maximum",
+     None, "sonstiges"),
+    # 400 deckt Guthaben UND Anfragefehler ab: dort entscheidet der Antwort-Text/-Typ.
+    ("BadRequestError", 400, "Error code: 400 - Your credit balance is too low to access the "
+     "Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.", None, "guthaben"),
+    ("APIStatusError", 402, "Payment Required",
+     {"error": {"type": "billing_error", "message": "Insufficient funds"}}, "guthaben"),
+    # Status schlaegt Text: eine Drosselung, deren Body Plans & Billing erwaehnt, bleibt Drosselung.
+    ("RateLimitError", 429, "Error code: 429 - rate limit reached, raise it under Plans & Billing",
+     None, "drosselung"),
+])
+def test_classify_llm_error_prefers_sdk_status_over_text(cls_name, status, message, body, expected):
+    exc = _sdk_status_error(cls_name, status, message, body)
+    assert analyzer.classify_llm_error(exc)[0] == expected
+
+
 def _capturing_client(exc: Exception, seen: dict):
     """Client-Attrappe, die die Konstruktor-Argumente festhaelt und beim Aufruf scheitert."""
     class _Messages:
