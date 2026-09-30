@@ -11,6 +11,13 @@ import logging
 
 log = logging.getLogger("log-watcher")
 
+# Obergrenze fuer einen LLM-Aufruf. Er laeuft synchron in der einzigen Schleife: mit den
+# SDK-Standards (600 s, 2 Wiederholungen) hielt ein haengender Endpunkt alle uebrigen Targets und
+# den Heartbeat bis zu ~30 min an. 60 s x 2 Versuche bleiben unter der Healthcheck-Schwelle (180 s);
+# was laenger braucht, bricht ab und wird regelbasiert gemeldet.
+LLM_TIMEOUT_SECONDS = 60
+LLM_MAX_RETRIES = 1
+
 _TOOL = {
     "name": "report_assessment",
     "description": "Melde die Beurteilung der Log-Auffälligkeit strukturiert zurück.",
@@ -59,14 +66,33 @@ def rule_based(signals, summary: str, llm_error: str | None = None,
     return result
 
 
+def _sdk_error_class(name: str):
+    """Fehlerklasse des anthropic-SDK, None wenn SDK oder Klasse fehlen (lazy wie in assess)."""
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    cls = getattr(anthropic, name, None)
+    return cls if isinstance(cls, type) else None
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    timeout_cls = _sdk_error_class("APITimeoutError")
+    return isinstance(exc, TimeoutError) or (timeout_cls is not None and isinstance(exc, timeout_cls))
+
+
 def classify_llm_error(exc: BaseException) -> tuple[str, str]:
     """(Art, Klartext) eines gescheiterten LLM-Aufrufs.
 
     Die Art entscheidet, was zu TUN ist, und genau das soll in der Warnung stehen: leeres
     Guthaben will aufgeladen werden, ein abgelehnter Schlüssel ersetzt, eine Drosselung
     ausgesessen. Erkannt wird am Text der API-Antwort, weil die Fehlerklassen des SDK
-    (BadRequestError) beides abdecken — Guthaben UND echte Anfragefehler.
+    (BadRequestError) beides abdecken — Guthaben UND echte Anfragefehler. Eine
+    Zeitueberschreitung (LLM_TIMEOUT_SECONDS) zaehlt als Drosselung: der Endpunkt ist erreichbar,
+    antwortet aber nicht rechtzeitig.
     """
+    if _is_timeout(exc):
+        return "drosselung", "API antwortet nicht rechtzeitig (Zeitüberschreitung)"
     text = str(exc)
     low = text.lower()
     if "credit balance" in low or "plans & billing" in low or "billing" in low:
@@ -103,7 +129,8 @@ def assess(cfg, current, baseline, signals, samples=None, use_llm=None) -> dict:
 
     import anthropic  # lazy: nur nötig wenn LLM wirklich verwendet wird
 
-    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key,
+                                 timeout=LLM_TIMEOUT_SECONDS, max_retries=LLM_MAX_RETRIES)
     try:
         msg = client.messages.create(
             model=cfg.model,

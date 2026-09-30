@@ -10,6 +10,8 @@ import types
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
 from watcher.config import Config
 from watcher import analyzer, state
 from watcher.main import _maybe_alliswell, _maybe_llm_outage_warning
@@ -76,6 +78,51 @@ def test_classify_llm_error_names_the_thing_to_do():
     assert analyzer.classify_llm_error(Exception("429 rate limit exceeded"))[0] == "drosselung"
     kind, reason = analyzer.classify_llm_error(Exception("Verbindung weg"))
     assert kind == "sonstiges" and reason == "Verbindung weg"
+
+
+def _capturing_client(exc: Exception, seen: dict):
+    """Client-Attrappe, die die Konstruktor-Argumente festhaelt und beim Aufruf scheitert."""
+    class _Messages:
+        def create(self, **_kw):
+            raise exc
+
+    class _Client:
+        def __init__(self, **kw):
+            seen.update(kw)
+            self.messages = _Messages()
+
+    return _Client
+
+
+def test_llm_client_is_bounded_below_the_healthcheck():
+    # Ohne eigenes Limit galten die SDK-Standards (600 s, 2 Wiederholungen): ein haengender
+    # Endpunkt hielt die Schleife bis zu ~30 min an, Heartbeat und alle anderen Targets standen.
+    anthropic = pytest.importorskip("anthropic")
+    cfg = Config()
+    cfg.anthropic_api_key = "sk-test"
+    seen = {}
+    client = _capturing_client(anthropic.APITimeoutError(request=None), seen)
+    with patch.object(anthropic, "Anthropic", client):
+        analyzer.assess(cfg, {"total": 10}, {"total": 5}, [_S("error_spike", "30 Fehler")], use_llm=True)
+
+    assert seen["timeout"] == analyzer.LLM_TIMEOUT_SECONDS == 60
+    assert seen["max_retries"] == analyzer.LLM_MAX_RETRIES == 1
+    # alle Versuche zusammen bleiben unter HEALTH_MAX_STALENESS_SECONDS (Standard 180 s)
+    assert seen["timeout"] * (seen["max_retries"] + 1) < 180
+
+
+def test_llm_timeout_is_booked_as_throttling():
+    anthropic = pytest.importorskip("anthropic")
+    cfg = Config()
+    cfg.anthropic_api_key = "sk-test"
+    client = _capturing_client(anthropic.APITimeoutError(request=None), {})
+    with patch.object(anthropic, "Anthropic", client):
+        a = analyzer.assess(cfg, {"total": 10}, {"total": 5}, [_S("error_spike", "30 Fehler")], use_llm=True)
+
+    assert a["llm_used"] is False                # degradiert sauber auf die Regeln
+    assert a["llm_error_kind"] == "drosselung"   # -> Warnpfad "meist von selbst vorbei"
+    assert "Zeitüberschreitung" in a["llm_error"]
+    assert analyzer.classify_llm_error(TimeoutError("read timed out"))[0] == "drosselung"
 
 
 # ── Discord: Warnung statt Stille, kein „alles in Ordnung" ─────────────────────────────────
