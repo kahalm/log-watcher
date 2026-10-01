@@ -2,7 +2,7 @@
 
 Statische Checks laufen immer (validieren das JSON + den LogTags-Falt-Processor).
 Der _simulate-Teil laeuft nur, wenn ein Elasticsearch erreichbar ist
-(ES_TEST_URL, Default http://10.24.13.6:9200) — sonst wird er uebersprungen.
+(ES_TEST_URL, KEIN Default — ohne die Variable wird er uebersprungen und es geht kein Netz raus).
 """
 import json
 import os
@@ -112,11 +112,14 @@ def test_dotted_log_level_is_folded_before_information_default():
 # Live-_simulate (nur wenn ES erreichbar)
 # ---------------------------------------------------------------------------
 
-ES_URL = os.getenv("ES_TEST_URL", "http://10.24.13.6:9200")
+# Live-Tests NUR bei ausdruecklicher Vorgabe: ohne ES_TEST_URL wird KEIN Netz angefasst. Vorher stand hier die
+# Prod-Elasticsearch als Default — jeder volle Testlauf auf dem Host fragte sie schon beim Sammeln an
+# (Codereview 2026-09-29, Welle W4s-Abschluss).
+ES_URL = os.getenv("ES_TEST_URL", "")
 
 
 def _es_reachable():
-    if requests is None:
+    if requests is None or not ES_URL:
         return False
     try:
         return requests.get(ES_URL, timeout=2).ok
@@ -125,7 +128,7 @@ def _es_reachable():
 
 
 @pytest.mark.skipif(
-    not _es_reachable(), reason=f"Elasticsearch nicht erreichbar ({ES_URL})"
+    not _es_reachable(), reason=f"Elasticsearch nicht erreichbar oder ES_TEST_URL nicht gesetzt ({ES_URL or '-'})"
 )
 def test_simulate_logtags_folding_live():
     pipe = _load_pipeline()
@@ -157,7 +160,7 @@ def test_simulate_logtags_folding_live():
 
 
 @pytest.mark.skipif(
-    not _es_reachable(), reason=f"Elasticsearch nicht erreichbar ({ES_URL})"
+    not _es_reachable(), reason=f"Elasticsearch nicht erreichbar oder ES_TEST_URL nicht gesetzt ({ES_URL or '-'})"
 )
 def test_simulate_heartbeat_tag_live():
     pipe = _load_pipeline()
@@ -191,7 +194,7 @@ def test_simulate_heartbeat_tag_live():
 
 
 @pytest.mark.skipif(
-    not _es_reachable(), reason=f"Elasticsearch nicht erreichbar ({ES_URL})"
+    not _es_reachable(), reason=f"Elasticsearch nicht erreichbar oder ES_TEST_URL nicht gesetzt ({ES_URL or '-'})"
 )
 def test_simulate_dotted_log_level_live():
     """Die Faelle aus rookhub/TODO.md (Level-Fund) plus Reindex eines schon doppelt getaggten
