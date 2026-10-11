@@ -83,7 +83,9 @@ def evaluate_security(sec: dict, cfg) -> "list[Signal]":
         # Zähler (alte/fremde Aggregation), wird wie bisher der Gesamtzähler benutzt.
         auth = int(st.get("auth_fail_scoped", st.get("auth_fail", 0)))
         scope = f" auf {prefix}*" if prefix and "auth_fail_scoped" in st else ""
-        if c4xx >= cfg.security_scan_min_4xx and paths >= cfg.security_scan_min_paths:
+        scan_ignored = ip in (getattr(cfg, "security_scan_ignore_ips", None) or [])
+        if (not scan_ignored and c4xx >= cfg.security_scan_min_4xx
+                and paths >= cfg.security_scan_min_paths):
             signals.append(Signal(
                 "api_scan", "high",
                 f"IP {ip}: {c4xx} 4xx-Antworten über {paths} verschiedene Pfade im "

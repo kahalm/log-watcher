@@ -21,6 +21,7 @@ defaults:
   # security_check: true
   # security_scan_min_4xx: 40
   # security_scan_min_paths: 15
+  # security_scan_ignore_ips: [10.24.12.12]   # eigene Test-Werkzeuge vom api_scan ausnehmen (nur Dev)
   # security_auth_fail_threshold: 25
   # Ausgehende HttpClient-Logs der App (Logger-Praefix) zaehlen nicht als Client-Verhalten —
   # sie tragen den Upstream-Statuscode plus IP/Pfad des umgebenden Requests (Fehlalarm-Falle).

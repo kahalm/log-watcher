@@ -199,3 +199,28 @@ def test_security_window_ohne_exclude_prefixe_kein_must_not():
     es._search = lambda body, index=None: bodies.append(body) or {}
     es.security_window("2026-09-09T08:54:00Z", "2026-09-09T14:54:00Z")
     assert "must_not" not in bodies[0]["query"]["bool"]
+
+
+def test_api_scan_ignored_ip_is_quiet_but_others_still_fire():
+    # Eigener UI-Sweep gegen Dev (10./11.10.2026) — nur api_scan wird für die IP ausgesetzt.
+    cfg = _cfg()
+    cfg.security_scan_ignore_ips = ["10.24.12.12"]
+    sec = {"total_requests": 2000, "suspicious": {"count": 0, "paths": {}, "ips": {}},
+           "by_ip": {"10.24.12.12": {"total": 9000, "c4xx": 82, "auth_fail": 0, "distinct_paths": 15},
+                     "5.6.7.8": {"total": 200, "c4xx": 120, "auth_fail": 0, "distinct_paths": 80}}}
+    sigs = security.evaluate_security(sec, cfg)
+    assert [s.kind for s in sigs] == ["api_scan"]
+    assert "5.6.7.8" in sigs[0].detail
+
+
+def test_api_scan_ignored_ip_still_reports_auth_bruteforce():
+    cfg = _cfg()
+    cfg.security_scan_ignore_ips = ["10.24.12.12"]
+    sec = {"total_requests": 500, "suspicious": {"count": 0, "paths": {}, "ips": {}},
+           "by_ip": {"10.24.12.12": {"total": 60, "c4xx": 60, "auth_fail": 55, "distinct_paths": 20}}}
+    assert [s.kind for s in security.evaluate_security(sec, cfg)] == ["auth_bruteforce"]
+
+
+def test_scan_ignore_ips_from_yaml_string_is_split():
+    cfg = Config().with_overrides({"security_scan_ignore_ips": "10.24.12.12, 10.0.0.1"})
+    assert cfg.security_scan_ignore_ips == ["10.24.12.12", "10.0.0.1"]

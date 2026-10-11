@@ -118,6 +118,10 @@ class Config:
     # (Hohe Pfad-Vielfalt unterscheidet einen Scan von legitimen, wiederholten 404 auf wenige Endpunkte.)
     security_scan_min_4xx: int = field(default_factory=lambda: _int("SECURITY_SCAN_MIN_4XX", 40))
     security_scan_min_paths: int = field(default_factory=lambda: _int("SECURITY_SCAN_MIN_PATHS", 15))
+    # Quell-IPs, die NICHT auf api_scan geprüft werden — eigene Test-Werkzeuge, die absichtlich viele
+    # Fehlerpfade abklopfen (UI-Sweep gegen Dev, 10./11.10.2026). Nur pro Target setzen (Dev), nie
+    # für Prod; suspicious_requests und auth_bruteforce gelten für diese IPs weiter.
+    security_scan_ignore_ips: list = field(default_factory=lambda: _list("SECURITY_SCAN_IGNORE_IPS", ""))
     # Auth-Brute-Force: ab so vielen abgelehnten Auth-Antworten (401/403) je Quell-IP.
     security_auth_fail_threshold: int = field(default_factory=lambda: _int("SECURITY_AUTH_FAIL_THRESHOLD", 25))
     # …aber nur auf den Auth-Endpunkten. 401/403 auf normalen API-Pfaden sind meist ein
