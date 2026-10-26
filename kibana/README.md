@@ -7,6 +7,9 @@ ES geschriebenen Alerts (Index `log-watcher-alerts-*`):
 - **Visualisierungen:** „Alerts über Zeit (nach Severity)", „Alerts nach Severity", „Häufigste Signale"
 - **Gespeicherte Suche** „log-watcher: Alerts"
 - **Dashboard** „log-watcher — Alert-Historie"
+- **Zyklus-Status** (Index `log-watcher-cycles-*`, nur mit `CYCLE_STATUS_ENABLED=true`): Data View
+  `log-watcher cycles`, „Zyklen über Zeit (Erfolg/Fehlschlag)", „Zyklen nach Ergebnis", gespeicherte
+  Suche „log-watcher: Zyklen" — als zweite Reihe im selben Dashboard
 
 ## Import (Kibana 8.17)
 Stack Management → **Saved Objects** → **Import** → Datei `log-watcher-dashboard.ndjson` wählen

@@ -324,7 +324,9 @@ def deliver(cfg: Config, es: ESClient, now: datetime, sig: str, assessment: dict
     return emailed, bool(sent)
 
 
-def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
+def run_cycle(cfg: Config, es: ESClient, now: datetime) -> dict:
+    """Ein Zyklus für ein Target. Liefert die Zusammenfassung für den Zyklus-Status (S5-017):
+    {result: quiet|suppressed|not_anomalous|alerted|undelivered, signals: [kind…], window_total}."""
     st = state.load_state(cfg.state_file)
     current, baseline, signals = collect_signals(cfg, es, now, state.known_fingerprints(st, cfg.name))
     log.info("Fenster: total=%s levels=%s | Baseline(%s): total=%s",
@@ -343,6 +345,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
         scrub.scrub_signals(signals)
 
     METRICS.add_signals([s.kind for s in signals])
+    summary = {"signals": [s.kind for s in signals], "window_total": current.get("total")}
 
     # Aktuelle Fehler-Fingerprints als gesehen merken (Feature 9) — vor jedem frühen Return.
     state.record_fingerprints(st, cfg.name, {fp.fingerprint(m) for m in current.get("error_messages", {})}, now_ts)
@@ -350,14 +353,14 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     if not signals:
         state.save_state(cfg.state_file, st)
         log.info("Keine Auffälligkeit (Regel-Gate leer).")
-        return
+        return {**summary, "result": "quiet"}
 
     log.info("Regel-Gate ausgelöst: %s", [s.kind for s in signals])
     if state.in_cooldown(st, cfg.name, sig, cfg.cooldown_hours * 3600, now_ts):
         state.save_state(cfg.state_file, st)
         METRICS.inc("suppressed_total")
         log.info("Unterdrückt (Cooldown aktiv für Signatur %s).", sig)
-        return
+        return {**summary, "result": "suppressed"}
 
     assessment = assess_cached(cfg, es, st, sig, now, current, baseline, signals)
     log.info("Beurteilung: anomalous=%s severity=%s llm=%s",
@@ -366,7 +369,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     if not assessment.get("anomalous"):
         # Auch "nicht auffällig" merken -> kein erneuter LLM-Call für dasselbe Muster im Cooldown.
         state.save_state(cfg.state_file, state.record_alert(st, cfg.name, sig, now_ts))
-        return
+        return {**summary, "result": "not_anomalous"}
 
     _emailed, delivered = deliver(cfg, es, now, sig, assessment, current, baseline, signals)
     METRICS.inc("alerts_total")
@@ -378,6 +381,7 @@ def run_cycle(cfg: Config, es: ESClient, now: datetime) -> None:
     else:
         log.error("Kein Alert-Kanal erfolgreich — Cooldown NICHT gesetzt, nächster Zyklus versucht es erneut.")
     state.save_state(cfg.state_file, st)
+    return {**summary, "result": "alerted" if delivered else "undelivered"}
 
 
 def startup_probe(cfg: Config, es: ESClient, now: datetime) -> None:
@@ -608,8 +612,10 @@ def _run_cycles(clients, now: datetime) -> dict:
     """
     results: dict = {}
     for cfg, es in clients:
+        started = time.monotonic()
+        summary = None
         try:
-            run_cycle(cfg, es, now)
+            summary = run_cycle(cfg, es, now)
             results[cfg.name] = None
         except ESError as e:
             METRICS.inc("es_errors_total")
@@ -618,7 +624,21 @@ def _run_cycles(clients, now: datetime) -> dict:
         except Exception as e:  # noqa: BLE001 — ein kaputtes Target darf die anderen nicht stoppen
             log.exception("Unerwarteter Fehler im Zyklus [%s]", cfg.name)
             results[cfg.name] = _cycle_failure_reason(e)
+        _write_cycle_status(cfg, es, now, time.monotonic() - started, summary, results[cfg.name])
     return results
+
+
+def _write_cycle_status(cfg: Config, es: ESClient, now: datetime, duration_s: float,
+                        summary, error) -> None:
+    """Zyklus-Status nach ES (log-watcher-cycles-*, S5-017) — nur wenn eingeschaltet, nie im
+    Trockenlauf. Ein Schreibfehler (ES weg, 429) kostet nur das Status-Dokument, nicht den Zyklus."""
+    if not cfg.cycle_status_enabled or cfg.dry_run:
+        return
+    try:
+        doc = alerts.build_cycle_doc(cfg, now, duration_s, summary, error)
+        es.index_alert(doc, alerts.alert_index_name(cfg.cycle_status_index_prefix, now))
+    except Exception as e:  # noqa: BLE001
+        log.warning("Zyklus-Status [%s] nicht geschrieben: %s", cfg.name, e)
 
 
 def _record_cycle_results(glob: Config, st: dict, results: dict, now: datetime) -> None:
@@ -813,6 +833,11 @@ def main() -> int:
                 es.ensure_alert_template(cfg.alert_index_prefix)
             except ESError as e:
                 log.warning("Alert-Index-Template [%s]: %s", cfg.name, e)
+        if cfg.cycle_status_enabled and not cfg.dry_run:
+            try:
+                es.ensure_alert_template(cfg.cycle_status_index_prefix)
+            except ESError as e:
+                log.warning("Zyklus-Status-Index-Template [%s]: %s", cfg.name, e)
 
     if glob.notify_on_start and not glob.dry_run:
         start_msg = _startup_message(targets)

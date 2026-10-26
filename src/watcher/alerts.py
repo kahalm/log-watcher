@@ -1,4 +1,4 @@
-"""Aufbau des Alert-Dokuments für die ES-Indizierung (Kibana-Historie)."""
+"""Aufbau der Dokumente für die ES-Indizierung (Kibana-Historie): Alerts und Zyklus-Status."""
 from __future__ import annotations
 
 
@@ -37,4 +37,39 @@ def build_alert_doc(assessment, signals, current, baseline, cfg, ts_iso, signatu
             ],
         },
         "baseline": {"total": baseline["total"], "levels": baseline["levels"]},
+    }
+
+
+def build_cycle_doc(cfg, now, duration_s: float, summary, error) -> dict:
+    """Zyklus-Status eines Targets als ECS-Dokument (Index ``log-watcher-cycles-*``, S5-017).
+
+    summary: Rückgabe von run_cycle ({result, signals, window_total}) oder None, wenn der Zyklus
+    scheiterte; error: Grund ohne ES-Adresse (main._cycle_failure_reason) oder None.
+    Signal-Arten als sortierte Menge (kontrollierte Werte), keine Details/Messages — die stehen
+    in den Alerts und können PII tragen.
+    """
+    from . import __version__
+    kinds = list((summary or {}).get("signals") or [])
+    return {
+        "@timestamp": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "event": {
+            "kind": "event",
+            "category": ["process"],
+            "type": ["info"],
+            "dataset": "log-watcher.cycle",
+            "action": "cycle",
+            "outcome": "failure" if error else "success",
+            "duration": int(round(duration_s * 1_000_000_000)),   # ECS: Nanosekunden
+        },
+        "service": {"name": "log-watcher", "version": __version__},
+        "log-watcher": {
+            "target": getattr(cfg, "name", "default"),
+            "result": (summary or {}).get("result") if not error else "failed",
+            "signals": len(kinds),
+            "signal_kinds": sorted(set(kinds)),
+            "window_total": (summary or {}).get("window_total"),
+            "window_hours": getattr(cfg, "window_hours", None),
+            "monitored_indices": list(getattr(cfg, "es_indices", []) or []),
+            "error": error,
+        },
     }

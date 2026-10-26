@@ -82,6 +82,16 @@ Kibana eine durchsuchbare Historie + Dashboards bauen kannst. Felder u.a.: `@tim
 `severity`, `summary`, `suspected_cause`, `recommended_action`, `llm_used`, `emailed`,
 `signals[]`, `window.levels`, `window.top_error_messages[] {message,count}`, `baseline`.
 Beim Start legt der Watcher ein Index-Template mit `number_of_replicas=0` an (Single-Node → green).
+
+**Zyklus-Status** (optional, `CYCLE_STATUS_ENABLED=true` bzw. `cycle_status_enabled: true`, Vorgabe aus):
+je Zyklus und Target ein ECS-Dokument in `log-watcher-cycles-YYYY.MM` (`CYCLE_STATUS_INDEX_PREFIX`) —
+`@timestamp`, `event.outcome` (success/failure), `event.duration` (ns), `event.dataset=log-watcher.cycle`,
+`log-watcher.target`, `log-watcher.result` (quiet/suppressed/not_anomalous/alerted/undelivered/failed),
+`log-watcher.signals` + `signal_kinds`, `log-watcher.window_total`, `log-watcher.error` (Grund ohne
+ES-Adresse). Keine Messages/Details (PII bleibt in den Alerts). Nie im `DRY_RUN`; ein Schreibfehler
+kostet nur das Status-Dokument. Index-Template (replicas=0) legt der Watcher beim Start an; eine
+Aufbewahrung (ILM/Löschen alter Monatsindizes) ist wie bei den Alert-Indizes nicht eingerichtet.
+Das Kibana-Dashboard (`kibana/`) zeigt die Zyklen unter den Alerts.
 Top-Fehler-Messages werden als **Array** indiziert (nicht als Objekt mit Message-Text als Feldname),
 um Mapping-Explosionen zu vermeiden.
 

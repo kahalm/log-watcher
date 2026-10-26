@@ -32,6 +32,8 @@ defaults:
   # smtp_from: log-watcher@oberschmid.homes
   # smtp_to: [p.oberschmid@cp-solutions.at]
   discord_webhook_url: https://discord.com/api/webhooks/XXXX/YYYY
+  # Zyklus-Status je Target nach ES (log-watcher-cycles-*), für Kibana; Vorgabe aus:
+  # cycle_status_enabled: true
   # Bei severity=high diese Discord-User-ID im Alert anpingen ("" = aus). Nur diese eine ID
   # ist in allowed_mentions erlaubt — Mentions aus Log-Text bleiben tot.
   # discord_mention_user_id: "123456789012345678"
