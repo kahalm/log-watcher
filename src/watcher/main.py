@@ -40,7 +40,9 @@ def _heartbeat_counts(cfg: Config, es: ESClient, now: datetime) -> dict:
     letzten heartbeat_max_staleness_minutes ankamen. {name: count}.
 
     "name=index": Zeilen mit heartbeat_service_field == name (strukturiert, nicht fälschbar über
-    Freitext). "name=index=phrase": Altform, match_phrase gegen das gerenderte heartbeat_field."""
+    Freitext). "name=index=phrase": Altform, match_phrase gegen das gerenderte heartbeat_field.
+    Nur gesunde Heartbeats zählen (S5-009): strukturiert heartbeat_status_field == healthy, in der
+    Altform fallen Zeilen mit "degraded" heraus (DB tot = kein Lebenszeichen)."""
     counts: dict = {}
     window_min = cfg.heartbeat_max_staleness_minutes
     if window_min <= 0 or not cfg.heartbeat_checks:
@@ -52,8 +54,11 @@ def _heartbeat_counts(cfg: Config, es: ESClient, now: datetime) -> dict:
             log.warning("Ungültige HEARTBEAT_CHECKS-Angabe übersprungen: %r", spec)
             continue
         name, index = parts[0], parts[1]
+        status_field = getattr(cfg, "heartbeat_status_field", "")
+        must_not = []
         if len(parts) == 2:
             match = {"term": {cfg.heartbeat_service_field: name}}
+            status = [{"term": {status_field: "healthy"}}] if status_field else []
         else:
             if spec not in _legacy_heartbeat_warned:
                 _legacy_heartbeat_warned.add(spec)
@@ -61,7 +66,12 @@ def _heartbeat_counts(cfg: Config, es: ESClient, now: datetime) -> dict:
                             "diesem Text) — auf %r umstellen (Feld %s).",
                             spec, f"{name}={index}", cfg.heartbeat_service_field)
             match = {"match_phrase": {cfg.heartbeat_field: parts[2]}}
-        query = {"bool": {"must": [match, rng]}}
+            status = []
+            if status_field:
+                must_not = [{"match_phrase": {cfg.heartbeat_field: "degraded"}}]
+        query = {"bool": {"must": [match, rng, *status]}}
+        if must_not:
+            query["bool"]["must_not"] = must_not
         counts[name] = es.count(index, query)
     return counts
 

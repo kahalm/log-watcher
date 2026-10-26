@@ -40,16 +40,20 @@ class _DocsES:
         self.queries.append((index, query))
         n = 0
         for doc in self.docs:
-            ok = True
-            for clause in query["bool"]["must"]:
-                if "term" in clause:
-                    (field, value), = clause["term"].items()
-                    ok &= _get(doc, field) == value
-                elif "match_phrase" in clause:
-                    (field, phrase), = clause["match_phrase"].items()
-                    ok &= phrase.lower() in str(_get(doc, field) or "").lower()
+            ok = all(_matches(doc, c) for c in query["bool"]["must"])
+            ok &= not any(_matches(doc, c) for c in query["bool"].get("must_not", []))
             n += ok
         return n
+
+
+def _matches(doc, clause):
+    if "term" in clause:
+        (field, value), = clause["term"].items()
+        return _get(doc, field) == value
+    if "match_phrase" in clause:
+        (field, phrase), = clause["match_phrase"].items()
+        return phrase.lower() in str(_get(doc, field) or "").lower()
+    return True  # range: alle Dokumente liegen im Fenster
 
 
 # Anonym gefälschte Zeilen: ClientLog mit kind=heartbeat_bot und ein Request-Log mit dem Text im Pfad.
@@ -110,7 +114,7 @@ def test_signed_bot_heartbeat_counts(monkeypatch):
     """Vertrag mit rookhub (POST /api/bot/heartbeat): gleiche Property HeartbeatService = schach-bot."""
     cfg = _cfg(monkeypatch)
     bot = {"message": "Heartbeat: schach-bot healthy",
-           "labels": {"HeartbeatService": "schach-bot"},
+           "labels": {"HeartbeatService": "schach-bot", "HeartbeatStatus": "healthy"},
            "log": {"logger": "RookHub.Api.Controllers.BotHeartbeatController"}}
     counts = _heartbeat_counts(cfg, _DocsES([bot, _REAL_API]), _now())
     assert counts["schach-bot"] == 1 and counts["rookhub-api"] == 1
@@ -151,3 +155,36 @@ def test_invalid_specs_are_skipped(monkeypatch):
     es = _DocsES([])
     assert _heartbeat_counts(cfg, es, _now()) == {}
     assert es.queries == []
+
+
+# ── S5-009: „degraded“ (DB tot) ist kein Lebenszeichen ──
+# rookhub/Crawler loggen den Heartbeat auch bei toter DB weiter — mit HeartbeatStatus=degraded auf
+# Information. Gezählt wurde jede Zeile, der Dienst galt als lebendig, solange er nur noch „degraded“ meldete.
+_DEGRADED_API = {"message": "Heartbeat: rookhub-api degraded db=False uptime=120s",
+                 "labels": {"HeartbeatService": "rookhub-api", "HeartbeatStatus": "degraded"},
+                 "log": {"logger": "RookHub.Api.Services.HeartbeatService"}}
+
+
+def test_degraded_heartbeat_is_no_sign_of_life(monkeypatch):
+    cfg = _cfg(monkeypatch, heartbeat_checks=["rookhub-api=rookhub-logs-*"])
+    counts = _heartbeat_counts(cfg, _DocsES([_DEGRADED_API, _DEGRADED_API]), _now())
+    assert counts == {"rookhub-api": 0}
+    assert [s.kind for s in rules.evaluate_heartbeats(counts, cfg)] == ["heartbeat_missing"]
+    # healthy zählt weiter
+    assert _heartbeat_counts(cfg, _DocsES([_DEGRADED_API, _REAL_API]), _now()) == {"rookhub-api": 1}
+    q = _DocsES([])
+    _heartbeat_counts(cfg, q, _now())
+    assert {"term": {"labels.HeartbeatStatus": "healthy"}} in q.queries[0][1]["bool"]["must"]
+
+
+def test_degraded_heartbeat_legacy_phrase_form(monkeypatch):
+    """Altform (Prod bis zur Umstellung): die Phrase trifft auch die degraded-Zeile → ausschließen."""
+    monkeypatch.setattr(watcher_main, "_legacy_heartbeat_warned", set())
+    cfg = _cfg(monkeypatch, heartbeat_checks=["rookhub-api=rookhub-logs-*=Heartbeat: rookhub-api"])
+    assert _heartbeat_counts(cfg, _DocsES([_DEGRADED_API]), _now()) == {"rookhub-api": 0}
+    assert _heartbeat_counts(cfg, _DocsES([_DEGRADED_API, _REAL_API]), _now()) == {"rookhub-api": 1}
+
+
+def test_status_filter_can_be_switched_off(monkeypatch):
+    cfg = _cfg(monkeypatch, heartbeat_checks=["rookhub-api=rookhub-logs-*"], heartbeat_status_field="")
+    assert _heartbeat_counts(cfg, _DocsES([_DEGRADED_API]), _now()) == {"rookhub-api": 1}

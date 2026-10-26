@@ -83,6 +83,11 @@ class Config:
         "schach-bot=rookhub-logs-*"))
     # Strukturiertes Feld mit dem Dienstnamen der Heartbeat-Zeile (ECS-Sink: labels.<Property>).
     heartbeat_service_field: str = field(default_factory=lambda: _str("HEARTBEAT_SERVICE_FIELD", "labels.HeartbeatService"))
+    # Status der Heartbeat-Zeile (S5-009): nur "healthy" zählt als Lebenszeichen. rookhub/Crawler
+    # loggen bei toter DB weiter — mit HeartbeatStatus=degraded auf Information. Form "name=index":
+    # zusätzlich term <feld> == healthy; Altform: Zeilen mit "degraded" im heartbeat_field fallen raus.
+    # Leer (nur per YAML: heartbeat_status_field: "") = ohne Statusfilter (wie bisher).
+    heartbeat_status_field: str = field(default_factory=lambda: _str("HEARTBEAT_STATUS_FIELD", "labels.HeartbeatStatus"))
     # Nur für die Altform "name=index=phrase": die GERENDERTE Nachricht (ECS: message). Eigenes
     # Feld, damit die LLM-Samples (sample_field) aufs Template umziehen können, ohne dass jeder
     # Dienst plötzlich heartbeat_missing meldet.
