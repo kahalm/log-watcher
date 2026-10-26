@@ -1,8 +1,9 @@
 """Elasticsearch-Aggregat-Abfragen (ausschließlich lesend, size=0).
 
-Robust gegen Fehlkonfiguration der Feldnamen: schlägt die volle Aggregation fehl
+Robust gegen Fehlkonfiguration der Feldnamen: schlägt die volle Aggregation mit 400 fehl
 (z.B. message_field nicht aggregierbar), wird stufenweise reduziert, statt den
-ganzen Zyklus zu verlieren.
+ganzen Zyklus zu verlieren. Andere Fehler (Auth, fehlender Index, Rate-Limit, 5xx,
+Verbindung) werden als ESError weitergereicht.
 """
 from __future__ import annotations
 
@@ -18,6 +19,14 @@ class ESError(Exception):
     def __init__(self, message: str, status: "int | None" = None):
         super().__init__(message)
         self.status = status  # HTTP-Status (4xx/5xx) oder None bei Verbindungsfehler
+
+
+def _field_fallback_ok(e: "ESError") -> bool:
+    """Nur ein 400 (Bad Request: Feld nicht aggregierbar, falscher Typ) ist durch eine reduzierte
+    Abfrage heilbar. 401/403 (Auth), 404 (Index fehlt), 429 (Rate-Limit), 5xx und
+    Verbindungsfehler sind keine Feldfrage — die fliegen als ESError weiter (S5-002), statt
+    als stille Nullen/leere Ergebnisse in die Auswertung zu gehen."""
+    return e.status == 400
 
 
 class ESClient:
@@ -55,8 +64,9 @@ class ESClient:
     def aggregate_window(self, start_iso: str, end_iso: str) -> dict:
         """Aggregate für ein Zeitfenster: {total, levels, error_messages}.
 
-        Fallback-Leiter bei 4xx (z.B. ungültiges Feld): volle Aggregation ->
-        nur Levels -> nur total. Bei Verbindungsfehler (status None) sofort weiterreichen.
+        Fallback-Leiter nur bei 400 (z.B. ungültiges Feld): volle Aggregation ->
+        nur Levels -> nur total. Andere Fehler (Verbindung, 401/403/404/429, 5xx) sofort
+        weiterreichen; scheitert auch die Gesamtzahl mit 400, ESError statt Null-Fenster.
         """
         cfg = self.cfg
         q = self._range(start_iso, end_iso)
@@ -85,15 +95,16 @@ class ESClient:
         # jedes Log weg, und „ohne Top-Messages" erschien erst, wenn schon die Levels scheiterten.
         for body, note in ((full, "Fallback ohne Top-Messages (Feld nicht aggregierbar?)"),
                            (levels_only, "Fallback nur Gesamtzahl (Level-Aggregation nicht möglich?)"),
-                           (total_only, "auch die Gesamtzahl scheitert — Fenster gilt als leer")):
+                           (total_only, None)):
             try:
                 return self._parse(self._search(body))
             except ESError as e:
-                if e.status is None or e.status >= 500:
-                    raise  # Verbindungs-/Serverfehler -> nicht durch Feld-Fallback heilbar
+                if not _field_fallback_ok(e) or note is None:
+                    # Kein Feldfehler, oder auch die Gesamtzahl scheitert: ein stilles Null-Fenster
+                    # sähe aus wie „keine Logs“ (Wächter blind, ohne es zu merken).
+                    raise
                 log.warning("Aggregation reduziert (%s): %s", note, e)
-        # Alle drei Stufen mit 4xx gescheitert:
-        return {"total": 0, "levels": {}, "error_messages": {}}
+        raise AssertionError("unerreichbar")  # pragma: no cover
 
     def fetch_samples(self, start_iso: str, end_iso: str, size: int, field: str) -> list:
         """Jüngste Fehler-Logzeilen (nur das angegebene Feld) als LLM-Kontext (Feature 14).
@@ -151,8 +162,8 @@ class ESClient:
     def per_index_counts(self, start_iso: str, end_iso: str) -> dict:
         """Nur Doc-Counts je Index für ein Fenster (leichtgewichtig, für die Index-Stille-Prüfung).
 
-        {index_name: count}. Bei 4xx (z.B. Feld nicht aggregierbar) leeres Dict;
-        Verbindungs-/Serverfehler (status None / >=500) werden weitergereicht.
+        {index_name: count}. Bei 400 (z.B. Feld nicht aggregierbar) leeres Dict;
+        alle anderen Fehler werden weitergereicht.
         """
         body = {
             "size": 0, "track_total_hits": False,
@@ -162,7 +173,7 @@ class ESClient:
         try:
             resp = self._search(body)
         except ESError as e:
-            if e.status is None or e.status >= 500:
+            if not _field_fallback_ok(e):
                 raise
             log.warning("per_index_counts reduziert (Feld nicht aggregierbar?): %s", e)
             return {}
@@ -174,8 +185,8 @@ class ESClient:
 
         Scope: Dokumente mit vorhandenem Statuscode-Feld (= Zugriffslogs, vgl. `request`-Tag).
         Liefert {total_requests, suspicious:{count,paths,ips}, by_ip:{ip:{total,c4xx,auth_fail,
-        distinct_paths}}}. Bei 4xx (Feld nicht aggregierbar) leeres Ergebnis statt Zyklus-Abbruch;
-        Verbindungs-/Serverfehler werden weitergereicht.
+        distinct_paths}}}. Bei 400 (Feld nicht aggregierbar) leeres Ergebnis statt Zyklus-Abbruch;
+        alle anderen Fehler werden weitergereicht.
         """
         from .security import DEFAULT_PATH_TOKENS
         cfg = self.cfg
@@ -241,7 +252,7 @@ class ESClient:
         try:
             resp = self._search(body)
         except ESError as e:
-            if e.status is None or e.status >= 500:
+            if not _field_fallback_ok(e):
                 raise
             log.warning("security_window reduziert (Feld nicht aggregierbar?): %s", e)
             return {"total_requests": 0, "suspicious": {"count": 0, "paths": {}, "ips": {}}, "by_ip": {}}
@@ -282,9 +293,9 @@ class ESClient:
         für die Linux-Heuristik.
 
         Liefert {hosts: {host: {total, ssh_fail, oom, disk, unit_fail}},
-        baseline_hosts: {host: total_docs_im_vorfenster}}. Bei 4xx (Feld nicht
-        aggregierbar / Index fehlt) leeres Ergebnis statt Zyklus-Abbruch;
-        Verbindungs-/Serverfehler werden weitergereicht.
+        baseline_hosts: {host: total_docs_im_vorfenster}}. Bei 400 (Feld nicht
+        aggregierbar) leeres Ergebnis statt Zyklus-Abbruch; alle anderen Fehler (auch 404
+        für einen fehlenden Index) werden weitergereicht.
         """
         from .linux import (SSH_FAIL_PHRASES, OOM_PHRASES, DISK_PHRASES,
                             DISK_KERNEL_ONLY_PHRASES, DISK_BENIGN_PHRASES,
@@ -340,7 +351,7 @@ class ESClient:
             resp = self._search(body, index=index)
             base = self._search(baseline_body, index=index)
         except ESError as e:
-            if e.status is None or e.status >= 500:
+            if not _field_fallback_ok(e):
                 raise
             log.warning("linux_window reduziert (Index/Feld fehlt?): %s", e)
             return {"hosts": {}, "baseline_hosts": {}}

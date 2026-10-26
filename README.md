@@ -147,7 +147,10 @@ ES_URL=http://localhost:9200 SELFTEST=true PYTHONPATH=src python -m watcher.main
   Aggregation automatisch (volle Aggregation → nur Levels → nur Total) statt auszufallen, und
   jede Stufe loggt, was dabei wegfällt; beim Start läuft eine **Probe**, die fehlende Logs/Felder
   sofort als WARN meldet — auch Fehler/Warnungen ohne Message-Templates (falsches
-  `ES_MESSAGE_FIELD`: nicht gemappt liefert ES leere Buckets statt eines Fehlers).
+  `ES_MESSAGE_FIELD`: nicht gemappt liefert ES leere Buckets statt eines Fehlers). Reduziert wird
+  nur bei **400**; Auth-Fehler (401/403), fehlender Index (404), Rate-Limit (429), 5xx und eine
+  bis zur Gesamtzahl gescheiterte Leiter gelten als Fehler (Aggregat: „Wächter blind“;
+  Zusatzprüfungen: übersprungen mit Warnung) statt als stilles Null-Fenster.
 - **Healthcheck:** Der Loop schreibt regelmäßig einen Heartbeat; der Docker-Healthcheck
   (`healthcheck.py`) meldet `unhealthy`, wenn der Heartbeat veraltet ist.
 - **Sauberes Herunterfahren:** `SIGTERM`/`SIGINT` brechen den langen Schlaf sofort ab

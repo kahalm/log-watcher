@@ -143,3 +143,64 @@ def test_failed_level_aggregation_is_logged_as_total_only(caplog):
     assert len(msgs) == 2
     assert "ohne Top-Messages" in msgs[0]
     assert "nur Gesamtzahl" in msgs[1]
+
+
+# ── S5-002: Feld-Fallback nur bei 400; andere 4xx und eine erschöpfte Leiter sind Fehler ──
+import pytest  # noqa: E402
+
+
+def _always(status):
+    def fake_search(body, index=None):
+        raise ESError(f"ES HTTP {status}", status=status)
+    return fake_search
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 429])
+@pytest.mark.parametrize("call", [
+    lambda c: c.aggregate_window("a", "b"),
+    lambda c: c.per_index_counts("a", "b"),
+    lambda c: c.security_window("a", "b"),
+    lambda c: c.linux_window("a", "b", "z"),
+], ids=["aggregate_window", "per_index_counts", "security_window", "linux_window"])
+def test_non_400_client_errors_are_not_swallowed(status, call):
+    c = _client()
+    c.cfg.linux_indices = ["filebeat-*"]
+    calls = []
+
+    def fake_search(body, index=None):
+        calls.append(body)
+        raise ESError(f"ES HTTP {status}", status=status)
+
+    c._search = fake_search
+    with pytest.raises(ESError) as ei:
+        call(c)
+    assert ei.value.status == status
+    assert len(calls) == 1   # keine Fallback-Leiter für Auth/Not-Found/Rate-Limit
+
+
+def test_exhausted_ladder_raises_instead_of_zero_window():
+    c = _client()
+    calls = []
+
+    def fake_search(body, index=None):
+        calls.append(body)
+        raise ESError("illegal_argument", status=400)
+
+    c._search = fake_search
+    with pytest.raises(ESError) as ei:
+        c.aggregate_window("a", "b")
+    assert ei.value.status == 400
+    assert len(calls) == 3   # voll -> levels -> total, dann Fehler statt Null-Dict
+
+
+@pytest.mark.parametrize("call, empty", [
+    (lambda c: c.per_index_counts("a", "b"), {}),
+    (lambda c: c.security_window("a", "b"),
+     {"total_requests": 0, "suspicious": {"count": 0, "paths": {}, "ips": {}}, "by_ip": {}}),
+    (lambda c: c.linux_window("a", "b", "z"), {"hosts": {}, "baseline_hosts": {}}),
+], ids=["per_index_counts", "security_window", "linux_window"])
+def test_400_keeps_reduced_result(call, empty):
+    c = _client()
+    c.cfg.linux_indices = ["filebeat-*"]
+    c._search = _always(400)
+    assert call(c) == empty
