@@ -38,6 +38,55 @@ def _list(key, default):
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+_TRUE = ("1", "true", "yes", "on")
+_FALSE = ("0", "false", "no", "off", "")
+
+
+def _coerce_scalar(typ: "str | None", v):
+    """YAML-Skalar auf den Feldtyp bringen wie die ENV-Leser (_bool/_int/_float) — (ok, wert).
+
+    Vorher wurde roh gesetzt: `dry_run: "false"` ist ein nicht-leerer String, also truthy, und
+    schaltete still den Trockenlauf ein (S5-020). Unlesbares → (False, v) = Typfehler, Startabbruch.
+    str-Felder bleiben unverändert."""
+    if typ == "bool":
+        if isinstance(v, bool):
+            return True, v
+        if isinstance(v, int) and v in (0, 1):
+            return True, bool(v)
+        if isinstance(v, str):
+            t = v.strip().lower()
+            if t in _TRUE:
+                return True, True
+            if t in _FALSE:
+                return True, False
+        return False, v
+    if typ == "int":
+        if isinstance(v, bool):
+            return False, v
+        if isinstance(v, int):
+            return True, v
+        if isinstance(v, float) and v.is_integer():
+            return True, int(v)
+        if isinstance(v, str):
+            try:
+                return True, int(v.strip())
+            except ValueError:
+                pass
+        return False, v
+    if typ == "float":
+        if isinstance(v, bool):
+            return False, v
+        if isinstance(v, (int, float)):
+            return True, float(v)
+        if isinstance(v, str):
+            try:
+                return True, float(v.strip())
+            except ValueError:
+                pass
+        return False, v
+    return True, v
+
+
 @dataclass
 class Config:
     # --- Identität / Baseline ---
@@ -241,6 +290,11 @@ class Config:
     def window_seconds(self) -> float:
         return self.window_hours * 3600
 
+    def _field_types(self) -> "dict[str, str]":
+        """{Feldname: Annotation als String} (wegen `from __future__ import annotations`)."""
+        from dataclasses import fields as _fields
+        return {f.name: f.type for f in _fields(self)}
+
     def _list_field_names(self) -> "set[str]":
         """Namen aller Listen-Felder (Annotation ist wegen `from __future__ import annotations`
         ein String)."""
@@ -248,9 +302,12 @@ class Config:
         return {f.name for f in _fields(self) if f.type == "list"}
 
     def with_overrides(self, overrides: dict) -> "Config":
-        """Setzt bekannte Felder aus einem Dict (YAML) — unbekannte Keys werden ignoriert."""
+        """Setzt bekannte Felder aus einem Dict (YAML) — unbekannte Keys werden ignoriert.
+        Listen werden wie bei ENV komma-gesplittet, bool/int/float koerziert (_coerce_scalar);
+        Unlesbares landet in _type_errors und bricht über validate() den Start ab."""
         import logging
         list_fields = self._list_field_names()
+        types = self._field_types()
         for k, v in (overrides or {}).items():
             if not hasattr(self, k):
                 logging.getLogger("log-watcher").warning("Unbekannter Config-Key ignoriert: %s", k)
@@ -265,6 +322,12 @@ class Config:
                     v = [x.strip() for x in v.split(",") if x.strip()]
                 else:
                     self._type_errors.append(f"'{k}' erwartet eine Liste, bekam {type(v).__name__}: {v!r}")
+                    continue
+            elif k not in list_fields:
+                ok, v = _coerce_scalar(types.get(k), v)
+                if not ok:
+                    self._type_errors.append(
+                        f"'{k}' erwartet {types.get(k)}, bekam {type(v).__name__}: {v!r}")
                     continue
             setattr(self, k, v)
         return self
