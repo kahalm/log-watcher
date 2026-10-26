@@ -505,6 +505,29 @@ def _outage_age(outage: dict, now: datetime) -> str:
     return f"seit {minutes // 60} h {minutes % 60:02d} min"
 
 
+def _probe_due_llm_outage(glob: Config, st: dict, now: datetime) -> None:
+    """Vor einer fälligen Ausfall-Warnung prüfen, ob der Bewerter wieder läuft (S5-013).
+
+    Erfolg: Ausfall beenden; war schon gewarnt worden, steht die Entwarnung an (llm_recovered),
+    sonst endet ein kurzer Aussetzer still. Misserfolg: Art/Grund auf den aktuellen Stand, die
+    Warnung geht wie bisher raus. Nur mit Schlüssel und nur, wenn eine Warnung fällig ist —
+    höchstens ein 1-Token-Aufruf je Warnabstand."""
+    if not glob.anthropic_api_key:
+        return
+    if not state.llm_outage_needs_notice(st, now.timestamp(), glob.llm_outage_notice_hours * 3600):
+        return
+    ok, kind, reason = analyzer.probe(glob)
+    if not ok:
+        state.set_llm_outage(st, kind or "sonstiges", reason or "LLM-Aufruf scheitert", now.timestamp())
+        return
+    ended = state.clear_llm_outage(st)
+    log.info("LLM-Probe erfolgreich — Ausfall beendet.")
+    if ended is not None and ended.get("notified_at") is not None:
+        st["llm_recovered"] = {"kind": ended.get("kind"), "reason": ended.get("reason"),
+                               "since": ended.get("since"), "at": now.timestamp()}
+    state.save_state(glob.state_file, st)
+
+
 def _maybe_llm_outage_warning(glob: Config, st: dict, now: datetime) -> None:
     """Warnt, solange die LLM-Bewertung nicht laeuft — statt Stille oder „alles in Ordnung“.
 
@@ -515,6 +538,8 @@ def _maybe_llm_outage_warning(glob: Config, st: dict, now: datetime) -> None:
     """
     if not glob.discord_webhook_url:
         return
+
+    _probe_due_llm_outage(glob, st, now)
 
     recovered = st.get("llm_recovered")
     if isinstance(recovered, dict):

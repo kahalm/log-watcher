@@ -260,3 +260,116 @@ def test_failed_recovery_post_is_retried_next_cycle():
     post.assert_called_once()
     assert "✅" in post.call_args[0][1]
     assert "llm_recovered" not in st
+
+
+# ── S5-013: Probeaufruf vor der fälligen Ausfall-Warnung ───────────────────────────────────
+# Vorher endete der Ausfall nur mit einem erfolgreichen LLM-Aufruf im Signal-Pfad — in einer
+# stillen Phase (kein Regel-Alarm) blieb die Warnung stehen und wiederholte sich täglich, obwohl
+# das Guthaben längst wieder da war.
+def _fake_anthropic_ok(calls):
+    mod = types.ModuleType("anthropic")
+
+    class _Messages:
+        def create(self, **kw):
+            calls.append(kw)
+            return types.SimpleNamespace(content=[], usage=None)
+
+    class _Client:
+        def __init__(self, **_kw):
+            self.messages = _Messages()
+
+    class _Timeout:
+        def __init__(self, timeout, *, connect=None):
+            self.read, self.connect = timeout, connect
+
+    mod.Anthropic = _Client
+    mod.Timeout = _Timeout
+    return mod
+
+
+def test_probe_is_a_one_token_request():
+    cfg = Config()
+    cfg.anthropic_api_key = "sk-test"
+    calls = []
+    with patch.dict(sys.modules, {"anthropic": _fake_anthropic_ok(calls)}):
+        assert analyzer.probe(cfg) == (True, None, None)
+    assert len(calls) == 1 and calls[0]["max_tokens"] == 1
+    assert calls[0]["model"] == cfg.model
+
+
+def test_probe_classifies_failures():
+    cfg = Config()
+    cfg.anthropic_api_key = "sk-test"
+    err = Exception("Your credit balance is too low. Please go to Plans & Billing to upgrade.")
+    with patch.dict(sys.modules, {"anthropic": _fake_anthropic(err)}):
+        ok, kind, reason = analyzer.probe(cfg)
+    assert (ok, kind) == (False, "guthaben") and "Guthaben" in reason
+
+
+def _due_outage(st, notified=True):
+    state.set_llm_outage(st, "guthaben", "Anthropic-Guthaben erschöpft", _now(8).timestamp() - 3 * 86400)
+    if notified:
+        state.record_llm_outage_notice(st, _now(8).timestamp() - 2 * 86400)
+
+
+def test_successful_probe_ends_outage_and_announces_recovery_instead_of_warning():
+    glob, st = _glob(), {}
+    glob.anthropic_api_key = "sk-test"
+    _due_outage(st)
+    with patch("watcher.main.analyzer.probe", return_value=(True, None, None)) as probe, \
+         patch("watcher.main.discord_notify.post_text") as post, \
+         patch("watcher.main.state.save_state"):
+        _maybe_llm_outage_warning(glob, st, _now(8))
+    probe.assert_called_once()
+    post.assert_called_once()
+    assert "✅" in post.call_args[0][1] and "⚠️" not in post.call_args[0][1]
+    assert state.llm_outage(st) is None and "llm_recovered" not in st
+
+
+def test_successful_probe_without_earlier_warning_stays_silent():
+    glob, st = _glob(), {}
+    glob.anthropic_api_key = "sk-test"
+    _due_outage(st, notified=False)
+    with patch("watcher.main.analyzer.probe", return_value=(True, None, None)), \
+         patch("watcher.main.discord_notify.post_text") as post, \
+         patch("watcher.main.state.save_state"):
+        _maybe_llm_outage_warning(glob, st, _now(8))
+    post.assert_not_called()
+    assert state.llm_outage(st) is None
+
+
+def test_failed_probe_keeps_warning_with_current_reason():
+    glob, st = _glob(), {}
+    glob.anthropic_api_key = "sk-test"
+    _due_outage(st)
+    with patch("watcher.main.analyzer.probe",
+               return_value=(False, "schluessel", "API-Schlüssel abgelehnt")), \
+         patch("watcher.main.discord_notify.post_text") as post, \
+         patch("watcher.main.state.save_state"):
+        _maybe_llm_outage_warning(glob, st, _now(8))
+    post.assert_called_once()
+    msg = post.call_args[0][1]
+    assert "⚠️" in msg and "Schlüssel" in msg and "seit 3 h" not in msg   # since bleibt (3 Tage)
+    assert state.llm_outage(st)["kind"] == "schluessel"
+
+
+def test_no_probe_when_no_warning_is_due_or_no_key():
+    glob, st = _glob(), {}
+    glob.anthropic_api_key = "sk-test"
+    state.set_llm_outage(st, "guthaben", "leer", _now(8).timestamp())
+    state.record_llm_outage_notice(st, _now(8).timestamp())      # gerade gewarnt
+    with patch("watcher.main.analyzer.probe") as probe, \
+         patch("watcher.main.discord_notify.post_text"), \
+         patch("watcher.main.state.save_state"):
+        _maybe_llm_outage_warning(glob, st, _now(9))
+    probe.assert_not_called()
+
+    glob.anthropic_api_key = None
+    st2 = {}
+    _due_outage(st2)
+    with patch("watcher.main.analyzer.probe") as probe, \
+         patch("watcher.main.discord_notify.post_text") as post, \
+         patch("watcher.main.state.save_state"):
+        _maybe_llm_outage_warning(glob, st2, _now(8))
+    probe.assert_not_called()
+    post.assert_called_once()                                    # Warnung wie bisher

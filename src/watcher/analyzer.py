@@ -127,6 +127,33 @@ def classify_llm_error(exc: BaseException) -> tuple[str, str]:
     return "sonstiges", text.strip().splitlines()[0][:200] if text.strip() else exc.__class__.__name__
 
 
+def _client(cfg):
+    """Anthropic-Client mit den begrenzten Zeiten (LLM_TIMEOUT_SECONDS/…_CONNECT_…)."""
+    import anthropic  # lazy: nur nötig wenn LLM wirklich verwendet wird
+
+    # anthropic.Timeout, NICHT httpx.Timeout: SDK 1.x lehnt httpx-Objekte mit TypeError ab.
+    timeout = anthropic.Timeout(LLM_TIMEOUT_SECONDS, connect=LLM_CONNECT_TIMEOUT_SECONDS)
+    return anthropic.Anthropic(api_key=cfg.anthropic_api_key,
+                               timeout=timeout, max_retries=LLM_MAX_RETRIES)
+
+
+def probe(cfg) -> "tuple[bool, str | None, str | None]":
+    """Billiger Probeaufruf (1 Ausgabe-Token): läuft der Bewerter wieder? (ok, Art, Klartext).
+
+    Für die fällige LLM-Ausfall-Warnung (S5-013): ohne Regel-Alarm gibt es sonst keinen
+    LLM-Aufruf, der den Ausfall beendet — die Warnung blieb stehen, obwohl das Guthaben längst
+    wieder da war. Bewusst messages.create statt count_tokens: das Zählen kostet nichts und
+    scheitert deshalb auch nicht an leerem Guthaben."""
+    try:
+        _client(cfg).messages.create(model=cfg.model, max_tokens=1,
+                                     messages=[{"role": "user", "content": "ping"}])
+    except Exception as e:  # noqa: BLE001
+        kind, reason = classify_llm_error(e)
+        log.warning("LLM-Probe gescheitert (%s): %s", kind, reason)
+        return False, kind, reason
+    return True, None, None
+
+
 def assess(cfg, current, baseline, signals, samples=None, use_llm=None) -> dict:
     """Gibt {anomalous, severity, summary, …, llm_used, llm_tokens} zurück.
 
@@ -150,12 +177,7 @@ def assess(cfg, current, baseline, signals, samples=None, use_llm=None) -> dict:
         "sample_log_lines": samples or [],
     }
 
-    import anthropic  # lazy: nur nötig wenn LLM wirklich verwendet wird
-
-    # anthropic.Timeout, NICHT httpx.Timeout: SDK 1.x lehnt httpx-Objekte mit TypeError ab.
-    timeout = anthropic.Timeout(LLM_TIMEOUT_SECONDS, connect=LLM_CONNECT_TIMEOUT_SECONDS)
-    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key,
-                                 timeout=timeout, max_retries=LLM_MAX_RETRIES)
+    client = _client(cfg)
     try:
         msg = client.messages.create(
             model=cfg.model,
