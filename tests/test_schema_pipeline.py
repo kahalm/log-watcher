@@ -228,3 +228,15 @@ def test_simulate_dotted_log_level_live():
     assert docs[0]["log"]["logger"] == "RookHub.Api.X"
     assert docs[5]["log.level"] == "Error"
     assert all("schema_error" not in d.get("labels", {}) for d in docs[:5])
+
+
+def test_component_template_maps_message_template_as_keyword():
+    """S2-012: labels.MessageTemplate ist der Gruppierschluessel des Watchers (message_field) —
+    als text gemappt scheitert die Terms-Aggregation. Das Component-Template mappt es keyword,
+    die Schema-Doku nennt das Feld und die Python-Konvention."""
+    tpl = json.loads((PIPELINE_PATH.parent / "logs-schema.component-template.json").read_text(encoding="utf-8"))
+    labels = tpl["template"]["mappings"]["properties"]["labels"]["properties"]
+    assert labels["MessageTemplate"]["type"] == "keyword"
+    doc = (PIPELINE_PATH.parent / "logging-schema.md").read_text(encoding="utf-8")
+    assert "`labels.MessageTemplate`" in doc
+    assert "schach-bot" in doc and "record.msg" in doc

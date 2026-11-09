@@ -12,7 +12,8 @@
         "log":     { "properties": { "level": { "type": "keyword" }, "logger": { "type": "keyword" } } },
         "service": { "properties": { "name": { "type": "keyword" }, "environment": { "type": "keyword" } } },
         "user":    { "properties": { "name": { "type": "keyword" }, "id": { "type": "keyword" } } },
-        "host":    { "properties": { "name": { "type": "keyword" } } }
+        "host":    { "properties": { "name": { "type": "keyword" } } },
+        "labels":  { "properties": { "MessageTemplate": { "type": "keyword", "ignore_above": 1024 } } }
       }
     }
   },

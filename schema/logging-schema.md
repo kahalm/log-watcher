@@ -22,6 +22,7 @@ wer es (noch) nicht tut, wird beim Ingest automatisch normalisiert (siehe unten)
 | `host.name` | keyword | ⭕ | Host/Maschine |
 | `trace.id`, `span.id` | keyword | ⭕ | Tracing-Korrelation |
 | `tags` | keyword[] | ⭕ | Frei belegbare Marker (ECS) — siehe Tag-Katalog unten |
+| `labels.MessageTemplate` | keyword | ⭕ (empfohlen) | Unformatiertes Message-Template (Gruppierschlüssel ohne eingesetzte Werte). Der log-watcher aggregiert Top-Fehler und `new_errors` darüber (`ES_MESSAGE_FIELD`); Zeilen ohne das Feld zählen nur im Level-Zähler |
 | `labels.*` | keyword | ⭕ | App-spezifische Zusatzfelder (frei) |
 
 ## Tag-Katalog
@@ -85,6 +86,12 @@ kanonische Vokabular (bitte **nur** diese Werte verwenden, damit Filter/Dashboar
   (idempotent, wirft nie).
 - **Python-/sonstige ECS-Dienste** setzen das ECS-Array **`tags` direkt** im Log-Dokument
   (`"tags": ["daily"]`). Das ist mit den heuristischen `append`-Blöcken voll kompatibel.
+- **`labels.MessageTemplate`:** Serilog-Dienste liefern es über den ECS-Formatter selbst. Python-Dienste
+  (`schach-bot` ab 2.84.1) setzen es im ES-Handler: bei `log.x('Text %s', wert)` das unformatierte
+  `record.msg`, bei f-Strings/festem Text den Text mit Zahlenfolgen als `{n}` (sonst wäre jede Zeile eine
+  eigene „Fehlerart“). Das Feld muss als `keyword` gemappt sein, sonst scheitert die Terms-Aggregation über
+  das Index-Muster für diesen Index — das Component-Template `logs-schema` mappt es so; für Indizes ohne
+  eigenes Template (z. B. `schach-bot-logs-*`) das Template per `apply.sh --wire <template>` einhängen.
 
 **Discover-Default** „Alle Logs (ohne Heartbeat)" filtert `not tags: (heartbeat or healthcheck)`.
 Die übrigen Tags sind Filter-Dimensionen (z.B. nur `tags: auth` für Security-Sicht).
