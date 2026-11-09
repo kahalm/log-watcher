@@ -29,6 +29,16 @@ def _field_fallback_ok(e: "ESError") -> bool:
     return e.status == 400
 
 
+def _write_error(what: str, e: "requests.RequestException") -> ESError:
+    """ESError fuer die schreibenden Aufrufe (Alert-Template/-Dokument) mit HTTP-Status wie in
+    ``_search`` (S2-006): ein 403/429 ist so von einem Verbindungsabbruch (status None)
+    unterscheidbar. Bei einer Antwort ohne die requests-Meldung samt URL, nur Status + Auszug."""
+    if isinstance(e, requests.HTTPError) and e.response is not None:
+        status = e.response.status_code
+        return ESError(f"{what}: ES HTTP {status}: {e.response.text[:300]}", status=status)
+    return ESError(f"{what}: ES nicht erreichbar: {e}", status=None)
+
+
 class ESClient:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -383,7 +393,7 @@ class ESClient:
             r = requests.put(url, json=body, headers=self._headers(), timeout=30)
             r.raise_for_status()
         except requests.RequestException as e:
-            raise ESError(f"Alert-Index-Template fehlgeschlagen: {e}") from e
+            raise _write_error("Alert-Index-Template fehlgeschlagen", e) from e
 
     def index_alert(self, doc: dict, index: str) -> None:
         """Schreibt ein Alert-Dokument (für die Kibana-Historie)."""
@@ -392,7 +402,7 @@ class ESClient:
             r = requests.post(url, json=doc, headers=self._headers(), timeout=30)
             r.raise_for_status()
         except requests.RequestException as e:
-            raise ESError(f"Alert-Indizierung fehlgeschlagen: {e}") from e
+            raise _write_error("Alert-Indizierung fehlgeschlagen", e) from e
 
     @staticmethod
     def _parse(resp: dict) -> dict:

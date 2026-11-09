@@ -204,3 +204,45 @@ def test_400_keeps_reduced_result(call, empty):
     c.cfg.linux_indices = ["filebeat-*"]
     c._search = _always(400)
     assert call(c) == empty
+
+
+# ── Schreibende Aufrufe tragen den HTTP-Status (S2-006) ──
+
+class _HttpErrResp:
+    def __init__(self, status):
+        self.status_code = status
+        self.text = '{"error":"security_exception"}'
+
+    def raise_for_status(self):
+        import requests
+        raise requests.HTTPError(f"{self.status_code} Client Error: for url: http://10.0.0.1:9200/x",
+                                 response=self)
+
+
+@pytest.mark.parametrize("status", [403, 429])
+@pytest.mark.parametrize("method,call", [
+    ("put", lambda c: c.ensure_alert_template("log-watcher-alerts")),
+    ("post", lambda c: c.index_alert({"a": 1}, "log-watcher-cycles-2026.11")),
+], ids=["ensure_alert_template", "index_alert"])
+def test_write_calls_keep_http_status(monkeypatch, status, method, call):
+    monkeypatch.setattr(es_client.requests, method, lambda *a, **k: _HttpErrResp(status))
+    with pytest.raises(ESError) as ei:
+        call(_client())
+    assert ei.value.status == status
+    assert "10.0.0.1" not in str(ei.value)   # Meldung ohne interne ES-URL
+
+
+@pytest.mark.parametrize("method,call", [
+    ("put", lambda c: c.ensure_alert_template("p")),
+    ("post", lambda c: c.index_alert({}, "i")),
+], ids=["ensure_alert_template", "index_alert"])
+def test_write_calls_connection_error_has_no_status(monkeypatch, method, call):
+    import requests
+
+    def boom(*a, **k):
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(es_client.requests, method, boom)
+    with pytest.raises(ESError) as ei:
+        call(_client())
+    assert ei.value.status is None
