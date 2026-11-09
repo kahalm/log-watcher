@@ -40,7 +40,7 @@ False-Positives niedrig.
   Ingestion-Stopp) anschlägt — und urteilt dann konservativ.
 - **Privacy:** Per Default verlassen nur Aggregate + Message-Templates (ohne eingesetzte Werte) den
   Host, Empfänger ist Anthropic. Wer `LLM_SAMPLE_FIELD=message` setzt, schickt **gerenderte**
-  Fehlerzeilen: `SCRUB_PII` entfernt E-Mails/IPs/Tokens, Benutzernamen und IDs bleiben stehen.
+  Fehlerzeilen: `SCRUB_PII` entfernt E-Mails/IPs/Tokens/Basic-Zugänge/`password=`-Werte, Benutzernamen und IDs bleiben stehen.
 - **Degradiert sauber:** Ohne `ANTHROPIC_API_KEY` meldet der Watcher rein **regelbasiert**.
 
 ## Signale (Regel-Gate)
@@ -204,7 +204,9 @@ für lokal die `build:`-Zeile einkommentieren). **Tag-gated wie die übrigen Rep
 - **LLM-Budget (11)** `LLM_MAX_CALLS_PER_DAY` + **Verdict-Cache (12)** `LLM_VERDICT_TTL_HOURS` → spart Calls.
 - **Sample-Logs (14):** einige *redigierte* Beispielzeilen gehen an den LLM für die Ursachenanalyse —
   per Default aus dem Template-Feld, also ohne eingesetzte Werte (`LLM_SAMPLE_FIELD`, s.o.).
-- **PII-Scrubbing (19):** `SCRUB_PII` entfernt E-Mails/IPv4+IPv6/Tokens vor LLM/Mail/ES — auch aus den
+- **PII-Scrubbing (19):** `SCRUB_PII` entfernt E-Mails/IPv4+IPv6/Tokens, `Authorization: Basic …` und kurze
+  `key=value`-Geheimnisse (Schlüssel wie `password`, `secret`, `token`, `apikey`, `auth`, `key`, auch
+  `db_password`/`accessToken`) vor LLM/Mail/ES — auch aus den
   Signal-Details (Security-Alarme zeigen dann `<ip>` statt der Quell-IP; wer die IP im Alarm braucht,
   setzt `SCRUB_PII=false`).
 - **HTTP (15/16):** `HTTP_PORT>0` → `/healthz`, `/status` (JSON), `/metrics` (Prometheus).

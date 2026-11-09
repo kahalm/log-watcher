@@ -94,3 +94,47 @@ def test_unparsebares_wird_redigiert():
     from watcher.scrub import scrub
     # 999.… matcht die IPv4-Regex, ist aber keine gueltige Adresse -> sicherer Default: weg.
     assert scrub("kaputt 999.1.1.1 Ende") == "kaputt <ip> Ende"
+
+
+# ── Kurze Geheimnisse (Review G4-002): key=value unter 32 Zeichen und HTTP-Basic ──
+
+def test_kurze_key_value_geheimnisse():
+    from watcher.scrub import scrub
+    s = scrub("Login fehlgeschlagen: password=hunter2 fuer kahalm")
+    assert "hunter2" not in s and "password=<secret>" in s
+    for raw, secret in [
+        ("db_password=Sommer2026", "Sommer2026"),
+        ("token=abc123", "abc123"),
+        ("?code=1&access_token=xyz987&x=1", "xyz987"),
+        ("api_key = 'k3y-v4lue'", "k3y-v4lue"),
+        ("apiKey=short1 next", "short1"),
+        ("x-api-key=abcd", "abcd"),
+        ("auth=s3cr3t", "s3cr3t"),
+        ("client_secret=\"with space\"", "with space"),
+        ('{"password": "pw-im-json", "user": "u"}', "pw-im-json"),
+        ("key=val42", "val42"),
+    ]:
+        out = scrub(raw)
+        assert secret not in out, (raw, out)
+        assert "<secret>" in out, (raw, out)
+
+
+def test_key_value_laesst_harmloses_stehen():
+    from watcher.scrub import scrub
+    for plain in ["monkey=banana", "exit code=1", "retries=3 timeout=30",
+                  "Basic Endgames (1990).pdf", "authority=x"]:
+        assert scrub(plain) == plain, plain
+
+
+def test_authorization_basic():
+    from watcher.scrub import scrub
+    s = scrub("Authorization: Basic dXNlcjpwdw==")
+    assert "dXNlcjpwdw" not in s and "Basic <credentials>" in s
+    s = scrub("header authorization: basic a2FoYWxtOnB3 abgelehnt")
+    assert "a2FoYWxtOnB3" not in s
+
+
+def test_langer_wert_bleibt_token():
+    from watcher.scrub import scrub
+    s = scrub("token=ABCDEFGHIJKLMNOPQRSTUVWXYZ012345")
+    assert s == "token=<token>"

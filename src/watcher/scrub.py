@@ -21,6 +21,24 @@ _IPV6 = re.compile(
     r")(?:%[0-9A-Za-z._-]+)?(?![0-9A-Za-z.])"
 )
 _LONGTOKEN = re.compile(r"\b[A-Za-z0-9_\-]{32,}\b")  # API-Keys / Hashes / Secrets
+# HTTP-Basic: "Basic <base64(user:pass)>" ist meist kürzer als 32 Zeichen. Nur Werte, die
+# nach Base64 aussehen (mindestens eine Ziffer, + / oder =), damit "Basic Endgames" bleibt.
+_BASIC = re.compile(r"\bBasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]{6,}={0,2}(?![A-Za-z0-9+/=])",
+                    re.IGNORECASE)
+# Geheimnis-Schlüsselnamen für key=value (auch db_password, x-api-key, accessToken, apiKey);
+# "key"/"auth"/"pwd" nur als ganzes Wort bzw. nach Trenner/camelCase — sonst träfe es "monkey".
+_SECRET_KEY = (
+    r"(?:[A-Za-z0-9]+[_.\-])*"
+    r"(?:[A-Za-z0-9]*(?i:password|passwd|secret|token|apikey)"
+    r"|(?i:pwd|auth|key)"
+    r"|[a-z0-9]+(?:Key|Auth|Pwd))"
+)
+# Wert: in Anführungszeichen oder bis zum nächsten Trenner. "<" ausgenommen, damit schon
+# redigierte Platzhalter (<token>, <jwt>) stehen bleiben; \x00 schützt behaltene IPs.
+_KV = re.compile(
+    r"(?<![\w\-])(" + _SECRET_KEY + r")(\s*=\s*)(?:\"[^\"]*\"|'[^']*'|[^\s&,;\"'<>\x00]+)"
+)
+_KV_JSON = re.compile(r"(\"" + _SECRET_KEY + r"\"\s*:\s*)\"[^\"]*\"")
 
 # IPv4-mapped IPv6 (::ffff:a.b.c.d) VOR den Einzel-Mustern behandeln: die IPv6-Regex kann
 # den Dotted-Quad-Schwanz nicht als Ganzes fassen und würde sonst "::ffff" separat mangeln
@@ -46,6 +64,7 @@ def scrub(text: str) -> str:
         return text
     s = _JWT.sub("<jwt>", text)
     s = _BEARER.sub("bearer <token>", s)
+    s = _BASIC.sub("Basic <credentials>", s)
     s = _URLCRED.sub(r"\1<pw>\2", s)
     s = _EMAIL.sub("<email>", s)
 
@@ -65,6 +84,9 @@ def scrub(text: str) -> str:
     # Zone-ID (%eth0) steckt nur im Gesamt-Match (group 0), geparst wird die Adresse (group 1).
     s = _IPV6.sub(lambda m: _keep_or_redact(m, m.group(1)), s)
     s = _LONGTOKEN.sub("<token>", s)
+    # Nach LONGTOKEN: lange Werte heißen weiter <token>, kurze Geheimnisse werden <secret>.
+    s = _KV.sub(r"\1\2<secret>", s)
+    s = _KV_JSON.sub(r'\1"<secret>"', s)
     for i, val in enumerate(kept):
         s = s.replace(f"\x00K{i}\x00", val)
     return s
